@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BugReporter Settings</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0c0c0f;
+      --surface: #141418;
+      --surface2: #1c1c22;
+      --border: #2a2a33;
+      --accent: #e8ff47;
+      --text: #f0f0f5;
+      --muted: #6b6b7a;
+      --success: #4ade80;
+      --danger: #f87171;
+      --radius: 8px;
+    }
+
+    body {
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      padding-bottom: 80px;
+    }
+
+    /* ── Header ── */
+    .header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .logo { font-size: 26px; }
+    .header-text h1 { font-size: 20px; font-weight: 800; }
+    .header-text p { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    /* ── Content Grid ── */
+    .content {
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* Two-column row */
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    /* Full-width row */
+    .row.full {
+      grid-template-columns: 1fr;
+    }
+
+    /* ── Section (card style) ── */
+    .section {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .section-title {
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .section-desc {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      line-height: 1.6;
+      background: var(--surface2);
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      border-left: 2px solid var(--border);
+    }
+
+    /* ── Field ── */
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .field label span {
+      font-size: 10px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 400;
+    }
+    .field input, .field textarea, .field select {
+      padding: 9px 11px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      outline: none;
+      transition: border-color 0.2s;
+      width: 100%;
+      line-height: 1.5;
+    }
+    .field input:focus, .field textarea:focus, .field select:focus { border-color: var(--accent); }
+    .field textarea { resize: vertical; min-height: 100px; }
+    .field input::placeholder, .field textarea::placeholder { color: var(--muted); }
+
+    /* ── Sections checklist ── */
+    .sections-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .sections-grid.small {
+      grid-template-columns: 1fr 1fr;
+    }
+    .section-check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: all 0.2s;
+      user-select: none;
+    }
+    .section-check:hover { border-color: var(--accent); }
+    .section-check.checked { border-color: var(--accent); background: rgba(232,255,71,0.05); }
+    .section-check input[type=checkbox] { display: none; }
+    .check-box {
+      width: 14px; height: 14px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px;
+      transition: all 0.2s;
+    }
+    .section-check.checked .check-box {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #000;
+    }
+    .check-label { font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Tag input ── */
+    .tag-input-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      min-height: 42px;
+      cursor: text;
+      transition: border-color 0.2s;
+    }
+    .tag-input-wrap:focus-within { border-color: var(--accent); }
+    .tag {
+      display: flex; align-items: center; gap: 4px;
+      padding: 2px 8px;
+      background: rgba(232,255,71,0.1);
+      border: 1px solid rgba(232,255,71,0.3);
+      border-radius: 20px;
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent);
+    }
+    .tag button {
+      background: none; border: none; color: var(--accent);
+      cursor: pointer; font-size: 11px; padding: 0; line-height: 1;
+      opacity: 0.6;
+    }
+    .tag button:hover { opacity: 1; }
+    .tag-input {
+      flex: 1; min-width: 100px;
+      background: none; border: none; outline: none;
+      color: var(--text); font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; padding: 2px 4px;
+    }
+    .tag-hint { font-size: 10px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+
+    /* ── API key row ── */
+    .key-row { display: flex; gap: 6px; }
+    .key-row input { flex: 1; }
+    .btn-reveal, .btn-test {
+      padding: 0 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .btn-reveal:hover, .btn-test:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-test {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      padding: 0 12px;
+    }
+    .btn-test:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-test.testing { color: var(--accent); }
+    .api-test-result {
+      margin-top: 6px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      display: none;
+    }
+    .api-test-result.visible { display: block; }
+    .api-test-result.success { color: var(--success); }
+    .api-test-result.error { color: var(--danger); }
+
+    /* ── Save bar ── */
+    .save-bar {
+      position: fixed;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 100%;
+      max-width: 960px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      z-index: 10;
+    }
+    .save-status {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      transition: color 0.3s;
+    }
+    .save-status.saved { color: var(--success); }
+    .btn-save {
+      padding: 9px 24px;
+      background: var(--accent);
+      border: none;
+      border-radius: var(--radius);
+      color: #000;
+      font-family: 'Syne', sans-serif;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-save:hover { background: #d4e83c; }
+    .btn-save:active { transform: scale(0.97); }
+
+    /* ── Responsive ── */
+    @media (max-width: 700px) {
+      .row {
+        grid-template-columns: 1fr;
+      }
+      .sections-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="logo">🪲</div>
+  <div class="header-text">
+    <h1>Bug Reporter Settings</h1>
+    <p>Ticket generation preferences</p>
+  </div>
+</div>
+
+<div class="content">
+
+  <!-- Row 1: API Key + Domain Knowledge -->
+  <div class="row">
+    <div class="section">
+      <div class="section-title">API Key</div>
+      <div class="field">
+        <label>Gemini API Key <span>stored locally</span></label>
+        <div class="key-row">
+          <input type="password" id="apiKey" placeholder="AIza..." />
+          <button class="btn-reveal" id="btn-reveal" title="Show/hide key">👁</button>
+          <button class="btn-test" id="btn-test" title="Test API connection">Test</button>
+        </div>
+        <div id="api-test-result" class="api-test-result"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Domain Knowledge</div>
+      <div class="field">
+        <label>Product Description <span>injected into prompts</span></label>
+        <textarea id="domainContext" rows="2" placeholder="e.g. B2B SaaS CRM for sales reps. Main flows: leads, pipeline, reporting."></textarea>
+      </div>
+      <div class="field">
+        <label>Tech Stack <span>optional</span></label>
+        <input type="text" id="techStack" placeholder="e.g. React, Node.js, PostgreSQL" />
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2: Ticket Sections (full width) -->
+  <div class="row full">
+    <div class="section">
+      <div class="section-title">Ticket Sections</div>
+      <div class="section-desc">Choose which sections to include in generated tickets.</div>
+      <div class="sections-grid" id="sections-grid">
+        <!-- injected by JS -->
+      </div>
+      <div class="field" style="margin-top: 8px;">
+        <label>Custom Sections <span>type + Enter to add</span></label>
+        <div class="tag-input-wrap" id="custom-sections-wrap">
+          <input class="tag-input" id="custom-section-input" placeholder="e.g. Workaround, Related Tickets…" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 3: Summary Guidelines + Description Guidelines -->
+  <div class="row">
+    <div class="section">
+      <div class="section-title">Summary (Title)</div>
+      <div class="field">
+        <label>Format / Prefix <span>optional</span></label>
+        <input type="text" id="summaryFormat" placeholder="e.g. [ComponentName]: Brief description" />
+      </div>
+      <div class="field">
+        <label>Summary Guidelines <span>include/avoid rules</span></label>
+        <textarea id="summaryGuidelines" rows="4" placeholder="Include:&#10;- Component name&#10;- User impact&#10;&#10;Avoid:&#10;- Vague terms&#10;- Internal IDs"></textarea>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Description (Body)</div>
+      <div class="field">
+        <label>Description Guidelines <span>include/avoid rules</span></label>
+        <textarea id="descriptionGuidelines" rows="4" placeholder="Include:&#10;- UI element names&#10;- Error messages&#10;&#10;Avoid:&#10;- Root cause speculation&#10;- Duplicate info from summary"></textarea>
+      </div>
+      <div class="field">
+        <label>Extra Instructions <span>freeform</span></label>
+        <textarea id="extraInstructions" rows="2" placeholder="e.g. Use bullet points for steps. Keep acceptance criteria testable."></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 4: UI Fields (full width, compact) -->
+  <div class="row full">
+    <div class="section">
+      <div class="section-title">Popup UI Fields</div>
+      <div class="section-desc">Choose which input fields to show in the extension popup.</div>
+      <div class="sections-grid small">
+        <div class="section-check checked" data-field="component">
+          <div class="check-box">✓</div>
+          <span class="check-label">Component/Area Field</span>
+        </div>
+        <div class="section-check checked" data-field="severity">
+          <div class="check-box">✓</div>
+          <span class="check-label">Severity Field</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Save bar -->
+<div class="save-bar">
+  <span class="save-status" id="save-status">Unsaved changes</span>
+  <button class="btn-save" id="btn-save">Save Settings</button>
+</div>
+
+<script src="settings.js"></script>
+</body>
+</html>

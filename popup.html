@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BugReporter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0c0c0f;
+      --surface: #141418;
+      --surface2: #1c1c22;
+      --border: #2a2a33;
+      --accent: #e8ff47;
+      --accent2: #ff6b35;
+      --text: #f0f0f5;
+      --muted: #6b6b7a;
+      --success: #4ade80;
+      --danger: #f87171;
+      --radius: 8px;
+    }
+
+    body {
+      width: 380px;
+      min-height: 520px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      overflow-x: hidden;
+    }
+
+    /* ── Header ───────────────────────────────────────────── */
+    .header {
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface);
+    }
+
+    .logo {
+      width: 28px;
+      height: 28px;
+      background: var(--accent);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .header-text h1 {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      color: var(--text);
+    }
+
+    .header-text p {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .auth-badge {
+      margin-left: auto;
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 3px 8px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .auth-badge.connected {
+      color: var(--success);
+      border-color: var(--success);
+    }
+    .auth-badge:hover { opacity: 0.8; }
+
+    /* ── Steps indicator ─────────────────────────────────── */
+    .steps {
+      display: flex;
+      padding: 10px 18px;
+      gap: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .step {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.3px;
+    }
+
+    .step-num {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      flex-shrink: 0;
+      transition: all 0.3s;
+    }
+
+    .step.active .step-num {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #000;
+      font-weight: 600;
+    }
+    .step.done .step-num {
+      background: var(--success);
+      border-color: var(--success);
+      color: #000;
+    }
+    .step.active { color: var(--text); }
+    .step.done { color: var(--success); }
+
+    .step-divider {
+      width: 20px;
+      height: 1px;
+      background: var(--border);
+      margin: 0 4px;
+      align-self: center;
+      flex-shrink: 0;
+    }
+
+    /* ── Main content ────────────────────────────────────── */
+    .main { padding: 14px 18px; }
+
+    /* ── Section label ───────────────────────────────────── */
+    .section-label {
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .section-label::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* ── Screenshot grid ─────────────────────────────────── */
+    .screenshot-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-bottom: 14px;
+      min-height: 80px;
+    }
+
+    .screenshot-thumb {
+      aspect-ratio: 16/9;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      overflow: hidden;
+      position: relative;
+      background: var(--surface2);
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .screenshot-thumb:hover { border-color: var(--accent); }
+    .screenshot-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .screenshot-thumb .thumb-num {
+      position: absolute;
+      bottom: 3px;
+      left: 3px;
+      background: rgba(0,0,0,0.7);
+      color: var(--accent);
+      font-size: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+
+    .screenshot-thumb .thumb-del {
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      background: rgba(0,0,0,0.7);
+      color: var(--danger);
+      font-size: 10px;
+      padding: 0 3px;
+      border-radius: 3px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      cursor: pointer;
+      border: none;
+      line-height: 1.4;
+    }
+    .screenshot-thumb:hover .thumb-del { opacity: 1; }
+
+    .screenshot-empty {
+      aspect-ratio: 16/9;
+      border-radius: var(--radius);
+      border: 1px dashed var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 18px;
+      background: var(--surface2);
+    }
+
+    /* ── Capture button ──────────────────────────────────── */
+    .btn-capture {
+      width: 100%;
+      padding: 10px;
+      background: var(--surface2);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      letter-spacing: 0.3px;
+    }
+    .btn-capture:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(232, 255, 71, 0.04);
+    }
+    .btn-capture:active { transform: scale(0.98); }
+    .btn-capture .shortcut {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+
+    /* ── Voice note ──────────────────────────────────────── */
+    .voice-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 14px;
+      align-items: flex-start;
+    }
+
+    .btn-mic {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--muted);
+      font-size: 15px;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-mic:hover { border-color: var(--accent2); color: var(--accent2); }
+    .btn-mic.recording {
+      border-color: var(--danger);
+      color: var(--danger);
+      animation: pulse-mic 1s infinite;
+    }
+    @keyframes pulse-mic {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0.3); }
+      50% { box-shadow: 0 0 0 6px rgba(248,113,113,0); }
+    }
+
+    .note-input {
+      flex: 1;
+      min-height: 36px;
+      max-height: 80px;
+      padding: 8px 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      resize: none;
+      transition: border-color 0.2s;
+      outline: none;
+      line-height: 1.5;
+    }
+    .note-input:focus { border-color: var(--accent); }
+    .note-input::placeholder { color: var(--muted); }
+
+    /* ── Context fields ──────────────────────────────────── */
+    .context-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+
+    .field-group { display: flex; flex-direction: column; gap: 4px; }
+    .field-group label {
+      font-size: 9px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+    .field-group input, .field-group select {
+      padding: 7px 9px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .field-group input:focus, .field-group select:focus { border-color: var(--accent); }
+    .field-group select option { background: var(--surface2); }
+
+    /* ── Generate button ─────────────────────────────────── */
+    .btn-generate {
+      width: 100%;
+      padding: 12px;
+      background: var(--accent);
+      border: none;
+      border-radius: var(--radius);
+      color: #000;
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all 0.2s;
+      letter-spacing: 0.3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn-generate:hover { background: #d4e83c; transform: translateY(-1px); }
+    .btn-generate:active { transform: translateY(0); }
+    .btn-generate:disabled {
+      background: var(--surface2);
+      color: var(--muted);
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ── Loading state ───────────────────────────────────── */
+    .loading-bar {
+      width: 100%;
+      height: 2px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 10px;
+      display: none;
+    }
+    .loading-bar.visible { display: block; }
+    .loading-bar-fill {
+      height: 100%;
+      width: 40%;
+      background: var(--accent);
+      border-radius: 2px;
+      animation: loading-slide 1.2s ease-in-out infinite;
+    }
+    @keyframes loading-slide {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+
+    .loading-text {
+      text-align: center;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      margin-top: 8px;
+      display: none;
+    }
+    .loading-text.visible { display: block; }
+
+    /* ── Result panel ────────────────────────────────────── */
+    #result-panel { display: none; }
+    #result-panel.visible { display: block; }
+
+    .result-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .result-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .btn-sm {
+      padding: 5px 10px;
+      border-radius: 5px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-sm.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #000;
+    }
+    .btn-sm.primary:hover { background: #d4e83c; color: #000; }
+    .btn-sm.copied {
+      background: var(--success);
+      border-color: var(--success);
+      color: #000;
+    }
+
+    .result-textarea {
+      width: 100%;
+      height: 240px;
+      padding: 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px;
+      line-height: 1.6;
+      resize: vertical;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .result-textarea:focus { border-color: var(--accent); }
+
+    /* ── Error ───────────────────────────────────────────── */
+    .error-box {
+      padding: 10px 12px;
+      background: rgba(248,113,113,0.08);
+      border: 1px solid var(--danger);
+      border-radius: var(--radius);
+      color: var(--danger);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      line-height: 1.5;
+      display: none;
+      margin-top: 10px;
+    }
+    .error-box.visible { display: block; }
+
+    /* ── Counter badge ───────────────────────────────────── */
+    .count-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent);
+      color: #000;
+      font-size: 9px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      margin-left: 4px;
+    }
+
+    /* ── Reset link ──────────────────────────────────────── */
+    .btn-reset {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+      transition: color 0.2s;
+    }
+    .btn-reset:hover { color: var(--text); }
+
+    /* ── Footer ──────────────────────────────────────────── */
+    .footer {
+      padding: 8px 18px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--border);
+    }
+    .footer-note {
+      font-size: 9px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+    }
+
+    /* ── Toast Notifications ─────────────────────────────── */
+    .toast-container {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      left: 12px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+    }
+    .toast {
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      animation: toast-in 0.3s ease-out;
+      pointer-events: auto;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .toast.success { background: var(--success); color: #000; }
+    .toast.error { background: var(--danger); color: #fff; }
+    .toast.info { background: var(--accent); color: #000; }
+    .toast.hiding { animation: toast-out 0.2s ease-in forwards; }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes toast-out {
+      from { opacity: 1; transform: translateY(0); }
+      to { opacity: 0; transform: translateY(-10px); }
+    }
+
+    /* ── Confirmation Dialog ─────────────────────────────── */
+    .dialog-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1001;
+    }
+    .dialog-overlay.visible { display: flex; }
+    .dialog {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      max-width: 300px;
+      animation: dialog-in 0.2s ease-out;
+    }
+    @keyframes dialog-in {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .dialog-title {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .dialog-message {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+    .dialog-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .dialog-btn {
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      font-family: 'Syne', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .dialog-btn.cancel {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .dialog-btn.cancel:hover { border-color: var(--text); }
+    .dialog-btn.confirm {
+      background: var(--danger);
+      border: none;
+      color: #fff;
+    }
+    .dialog-btn.confirm:hover { opacity: 0.9; }
+
+    /* ── Image Preview Modal ─────────────────────────────── */
+    .preview-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.9);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1002;
+      cursor: zoom-out;
+    }
+    .preview-modal.visible { display: flex; }
+    .preview-modal img {
+      max-width: 95%;
+      max-height: 95%;
+      object-fit: contain;
+      border-radius: var(--radius);
+    }
+    .preview-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: #fff;
+      font-size: 24px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .preview-nav:hover { background: rgba(255,255,255,0.2); }
+    .preview-nav.prev { left: 10px; }
+    .preview-nav.next { right: 10px; }
+    .preview-close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: #fff;
+      font-size: 20px;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    .preview-counter {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.7);
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Keyboard Shortcut Hints ─────────────────────────── */
+    .shortcut-hint {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      border-radius: 3px;
+      margin-left: 6px;
+    }
+
+    /* ── Panel Transitions ───────────────────────────────── */
+    #capture-panel, #result-panel {
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    #capture-panel.hiding {
+      opacity: 0;
+      transform: translateX(-10px);
+    }
+    #result-panel {
+      opacity: 0;
+      transform: translateX(10px);
+    }
+    #result-panel.visible {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ────────────────────────────────────────────── -->
+<div class="header">
+  <div class="logo">🪲</div>
+  <div class="header-text">
+    <h1>Bug Reporter</h1>
+    <p>Ticket Generator</p>
+  </div>
+  <div class="auth-badge" id="auth-badge" title="Click to set API key">⬤ sign in</div>
+  <button id="btn-settings" title="Settings" style="
+    background: none; border: 1px solid var(--border); border-radius: 6px;
+    color: var(--muted); font-size: 14px; width: 28px; height: 28px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    margin-left: 6px; transition: all 0.2s; flex-shrink: 0;
+  ">⚙️</button>
+</div>
+
+<!-- ── Steps ─────────────────────────────────────────────── -->
+<div class="steps">
+  <div class="step active" id="step-1">
+    <div class="step-num">1</div>
+    <span>Capture</span>
+  </div>
+  <div class="step-divider"></div>
+  <div class="step" id="step-2">
+    <div class="step-num">2</div>
+    <span>Describe</span>
+  </div>
+  <div class="step-divider"></div>
+  <div class="step" id="step-3">
+    <div class="step-num">3</div>
+    <span>Generate</span>
+  </div>
+</div>
+
+<!-- ── Main ──────────────────────────────────────────────── -->
+<div class="main">
+
+  <!-- Capture panel -->
+  <div id="capture-panel">
+    <div class="section-label">
+      Screenshots
+      <span id="shot-count" style="display:none" class="count-badge">0</span>
+    </div>
+
+    <div class="screenshot-grid" id="screenshot-grid">
+      <!-- thumbnails injected here -->
+    </div>
+
+    <button class="btn-capture" id="btn-capture">
+      <span>📸</span>
+      Capture current screen
+      <span class="shortcut">click</span>
+    </button>
+
+    <div class="section-label">Notes / Context</div>
+
+    <div class="voice-row">
+      <button class="btn-mic" id="btn-mic" title="Record voice note">🎙️</button>
+      <textarea
+        class="note-input"
+        id="note-input"
+        placeholder="Describe what you were doing, what broke, what you expected… (or record voice)"
+        rows="2"
+      ></textarea>
+    </div>
+
+    <div class="context-row">
+      <div class="field-group">
+        <label>Component / Area</label>
+        <input type="text" id="field-component" placeholder="e.g. Checkout Flow" />
+      </div>
+      <div class="field-group">
+        <label>Severity</label>
+        <select id="field-severity">
+          <option value="Critical">🔴 Critical</option>
+          <option value="High">🟠 High</option>
+          <option value="Medium" selected>🟡 Medium</option>
+          <option value="Low">🟢 Low</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="btn-generate" id="btn-generate" disabled>
+      <span>✨</span>
+      Generate Ticket
+    </button>
+
+    <div class="loading-bar" id="loading-bar"><div class="loading-bar-fill"></div></div>
+    <div class="loading-text" id="loading-text">Gemini is analyzing screenshots…</div>
+    <div class="error-box" id="error-box"></div>
+  </div>
+
+  <!-- Result panel -->
+  <div id="result-panel">
+    <div class="result-header">
+      <div class="section-label" style="margin-bottom:0; flex:1">Generated Ticket</div>
+      <div class="result-actions">
+        <button class="btn-sm" id="btn-regen" title="Regenerate">↺ redo</button>
+        <button class="btn-sm primary" id="btn-copy">⎘ Copy</button>
+      </div>
+    </div>
+
+    <textarea class="result-textarea" id="result-textarea" readonly></textarea>
+
+    <!-- Screenshot previews for easy copying -->
+    <div id="result-screenshots" style="display:none; margin-top: 10px;">
+      <div class="section-label" style="margin-bottom: 6px;">Screenshots (right-click to copy)</div>
+      <div id="result-screenshots-grid" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+    </div>
+
+    <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
+      <button class="btn-reset" id="btn-reset">← Start new bug report</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Footer ────────────────────────────────────────────── -->
+<div class="footer">
+  <span class="footer-note" id="page-meta">Loading page info…</span>
+  <span class="footer-note">Gemini 2.0 Flash</span>
+</div>
+
+<!-- ── Toast Container ──────────────────────────────────── -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ── Confirmation Dialog ──────────────────────────────── -->
+<div class="dialog-overlay" id="dialog-overlay">
+  <div class="dialog">
+    <div class="dialog-title" id="dialog-title">Confirm</div>
+    <div class="dialog-message" id="dialog-message">Are you sure?</div>
+    <div class="dialog-actions">
+      <button class="dialog-btn cancel" id="dialog-cancel">Cancel</button>
+      <button class="dialog-btn confirm" id="dialog-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Image Preview Modal ──────────────────────────────── -->
+<div class="preview-modal" id="preview-modal">
+  <button class="preview-close" id="preview-close">✕</button>
+  <button class="preview-nav prev" id="preview-prev">‹</button>
+  <img id="preview-image" src="" alt="Preview" />
+  <button class="preview-nav next" id="preview-next">›</button>
+  <div class="preview-counter" id="preview-counter">1 / 1</div>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>
