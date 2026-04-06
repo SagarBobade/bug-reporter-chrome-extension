@@ -902,8 +902,8 @@ btnReset.addEventListener("click", async () => {
   chatHistory.innerHTML = "";
 
   // Reset video UI
-  videoPreview.style.display = "none";
-  btnRecord.style.display = "block";
+  // videoPreview.style.display = "none";
+   btnRecord.style.display = "block";
 
   renderGrid(); updateGenerateBtn(); clearError();
   showToast("Bug report cleared", "info");
