@@ -10,6 +10,13 @@ const state = {
   isListening: false,
   hasRestoredResult: false,
   enabledFields: ["component", "severity"], // Default enabled
+  currentGenerationId: null, // Track ongoing generation
+  chatHistory: [], // Chat history with AI
+  videoBlob: null, // Recorded video blob
+  videoFrames: [], // Extracted key frames from video
+  isRecording: false,
+  mediaRecorder: null,
+  recordingStartTime: null,
 };
 
 const MAX_SCREENSHOTS = 6;
@@ -19,6 +26,7 @@ const STORAGE_KEY = "bugReporterSession";
 const $ = id => document.getElementById(id);
 const authBadge      = $("auth-badge");
 const btnCapture     = $("btn-capture");
+const btnAnnotate    = $("btn-annotate");
 const btnMic         = $("btn-mic");
 const btnGenerate    = $("btn-generate");
 const btnCopy        = $("btn-copy");
@@ -29,6 +37,7 @@ const fieldComp      = $("field-component");
 const fieldSev       = $("field-severity");
 const screenshotGrid = $("screenshot-grid");
 const shotCount      = $("shot-count");
+const btnClearAll    = $("btn-clear-all");
 const loadingBar     = $("loading-bar");
 const loadingText    = $("loading-text");
 const errorBox       = $("error-box");
@@ -36,6 +45,20 @@ const capturePanel   = $("capture-panel");
 const resultPanel    = $("result-panel");
 const resultTextarea = $("result-textarea");
 const pageMeta       = $("page-meta");
+const inputEditSection = $("input-edit-section");
+const inputEditToggle  = $("input-edit-toggle");
+const inputEditBody    = $("input-edit-body");
+const editNote         = $("edit-note");
+const editComponent    = $("edit-component");
+const editSeverity     = $("edit-severity");
+const btnRegenEdit     = $("btn-regenerate-edit");
+const chatSection      = $("chat-section");
+const chatHistory      = $("chat-history");
+const chatInput        = $("chat-input");
+const btnImprove       = $("btn-improve");
+const btnRecord        = $("btn-record");
+const videoPreview     = $("video-preview");
+const btnDeleteVideo   = $("btn-delete-video");
 
 // ── Persist session ───────────────────────────────────────────────────────────
 function saveSession(includeResult = false) {
@@ -62,6 +85,7 @@ function saveResult() {
     s.generatedTicket = resultTextarea.value;
     s.showingResult = true;
     s.screenshots = state.screenshots; // Ensure screenshots are saved with result
+    s.chatHistory = state.chatHistory; // Save chat history with ticket
     chrome.storage.local.set({ [STORAGE_KEY]: s });
   });
 }
@@ -75,6 +99,7 @@ async function restoreSession() {
         noteInput.value   = s.note      || "";
         fieldComp.value   = s.component || "";
         fieldSev.value    = s.severity  || "Medium";
+        state.chatHistory = s.chatHistory || [];
 
         // Restore generated result if exists
         if (s.showingResult && s.generatedTicket) {
@@ -132,6 +157,106 @@ async function loadFieldSettings() {
   });
 }
 
+// ── Check Generation Status (for background processing) ─────────────────────
+async function checkGenerationStatus() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "CHECK_GENERATION_STATUS" }, (response) => {
+      const genState = response?.state;
+      if (!genState) {
+        resolve();
+        return;
+      }
+
+      if (genState.isGenerating) {
+        // Generation is in progress - show loading UI
+        state.currentGenerationId = genState.generationId;
+        setLoading(true);
+        loadingText.textContent = "Still generating ticket…";
+        // Start polling for completion
+        startGenerationPolling();
+      } else if (genState.ticket && !state.hasRestoredResult) {
+        // Generation completed while popup was closed - show result
+        resultTextarea.value = genState.ticket;
+        state.hasRestoredResult = true;
+        // Clear the generation state since we've consumed the result
+        chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
+        showToast("Ticket generated while popup was closed!", "success");
+      } else if (genState.error && !state.hasRestoredResult) {
+        // Generation failed while popup was closed
+        showError("Generation failed: " + genState.error);
+        chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
+      }
+      resolve();
+    });
+  });
+}
+
+// Poll for generation completion
+let pollingInterval = null;
+function startGenerationPolling() {
+  if (pollingInterval) return;
+  pollingInterval = setInterval(() => {
+    chrome.runtime.sendMessage({ type: "CHECK_GENERATION_STATUS" }, (response) => {
+      const genState = response?.state;
+      if (!genState || !genState.isGenerating) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+
+        if (genState?.ticket) {
+          setLoading(false);
+          showResult(genState.ticket);
+          showToast("Ticket generated!", "success");
+          chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
+        } else if (genState?.error) {
+          setLoading(false);
+          showError("Generation failed: " + genState.error);
+          chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
+        }
+      }
+    });
+  }, 1000);
+}
+
+// Listen for generation complete message from background
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "GENERATION_COMPLETE") {
+    if (pollingInterval) {
+      clearInterval(pollingInterval);
+      pollingInterval = null;
+    }
+    setLoading(false);
+    if (msg.ticket) {
+      showResult(msg.ticket);
+      showToast("Ticket generated!", "success");
+    } else if (msg.error) {
+      showError("Generation failed: " + msg.error);
+    }
+    chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
+  }
+});
+
+// ── Check for Annotation Result ─────────────────────────────────────────────
+async function checkAnnotationResult() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(ANNOTATION_DATA_KEY, (result) => {
+      const data = result[ANNOTATION_DATA_KEY];
+      if (data && data.completed && data.result) {
+        // Add annotated screenshot to screenshots
+        if (state.screenshots.length < MAX_SCREENSHOTS) {
+          state.screenshots.push(data.result);
+          saveSession();
+          renderGrid();
+          updateGenerateBtn();
+          showToast("Annotated screenshot added!", "success");
+        }
+        // Clear annotation data
+        chrome.storage.local.remove(ANNOTATION_DATA_KEY);
+      }
+      resolve();
+    });
+  });
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   try {
@@ -148,6 +273,15 @@ async function init() {
 
   await restoreSession();
   await loadFieldSettings();
+
+  // Check for ongoing/completed generation
+  await checkGenerationStatus();
+
+  // Check for completed annotation
+  await checkAnnotationResult();
+
+  // Check for completed video recording
+  //await checkVideoRecording();
 
   chrome.runtime.sendMessage({ type: "CHECK_API_KEY" }, (res) => {
     if (res?.ok) {
@@ -175,8 +309,29 @@ async function init() {
   }
 }
 
+// ── Check Mic State (for restoring UI on popup reopen) ───────────────────────
+async function checkMicState() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || tab.url?.startsWith("chrome://")) return;
+
+    chrome.tabs.sendMessage(tab.id, { type: "CHECK_MIC_STATE" }, (response) => {
+      if (chrome.runtime.lastError) return;
+      if (response?.listening) {
+        state.isListening = true;
+        btnMic.classList.add("recording");
+        btnMic.textContent = "⏹️";
+        btnMic.title = "Stop recording";
+      }
+    });
+  } catch (e) { /* ignore */ }
+}
+
 // ── Speech Recognition (via content script) ──────────────────────────────────
 function setupSpeechRecognition() {
+  // Check if mic is already recording when popup opens
+  checkMicState();
+
   // Listen for messages from content script
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "MIC_STATE") {
@@ -301,6 +456,7 @@ function renderGrid() {
 
   shotCount.style.display = state.screenshots.length > 0 ? "inline-flex" : "none";
   shotCount.textContent = state.screenshots.length;
+  btnClearAll.style.display = state.screenshots.length > 1 ? "inline-block" : "none";
   updateSteps();
 }
 
@@ -325,6 +481,8 @@ function updateSteps() {
 }
 
 // ── Capture ───────────────────────────────────────────────────────────────────
+const ANNOTATION_DATA_KEY = "bugReporterAnnotationData";
+
 btnCapture.addEventListener("click", async () => {
   if (state.screenshots.length >= MAX_SCREENSHOTS) {
     showError(`Max ${MAX_SCREENSHOTS} screenshots. Remove one first.`); return;
@@ -347,17 +505,168 @@ btnCapture.addEventListener("click", async () => {
   }
 });
 
+// ── Capture & Annotate ────────────────────────────────────────────────────────
+btnAnnotate.addEventListener("click", async () => {
+  if (state.screenshots.length >= MAX_SCREENSHOTS) {
+    showError(`Max ${MAX_SCREENSHOTS} screenshots. Remove one first.`); return;
+  }
+  btnAnnotate.disabled = true;
+  btnAnnotate.textContent = "Capturing…";
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "CAPTURE_SCREENSHOT" });
+    if (res?.ok) {
+      // Get current tab ID to return to later
+      const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+      // Store screenshot for annotation editor along with return tab info
+      chrome.storage.local.set({
+        [ANNOTATION_DATA_KEY]: {
+          screenshot: res.dataUrl,
+          completed: false,
+          returnTabId: currentTab?.id || null
+        }
+      }, () => {
+        // Open annotation editor in new tab
+        chrome.tabs.create({
+          url: chrome.runtime.getURL("annotate.html")
+        });
+      });
+    } else {
+      showError("Screenshot failed: " + (res?.error || "unknown"));
+    }
+  } catch (e) {
+    showError("Screenshot failed: " + e.message);
+  } finally {
+    btnAnnotate.disabled = false;
+    btnAnnotate.innerHTML = `<span>✏️</span> Capture & Annotate <span class="shortcut">crop/mark</span>`;
+  }
+});
+
+// ── Video Recording ───────────────────────────────────────────────────────────
+//const VIDEO_RECORDING_KEY = "bugReporterVideoRecording";
+
+// btnRecord.addEventListener("click", () => {
+//   if (state.screenshots.length >= MAX_SCREENSHOTS) {
+//     showError(`Max ${MAX_SCREENSHOTS} screenshots. Remove one first to add video frames.`);
+//     return;
+//   }
+
+//   // Open dedicated recording page in new tab
+//   chrome.tabs.create({
+//     url: chrome.runtime.getURL("recorder.html")
+//   });
+// });
+
+// Check for completed video recording when popup opens
+// async function checkVideoRecording() {
+//   return new Promise((resolve) => {
+//     chrome.storage.local.get(VIDEO_RECORDING_KEY, (result) => {
+//       const data = result[VIDEO_RECORDING_KEY];
+//       if (data && data.frames && data.frames.length > 0) {
+//         // Add video frames to screenshots
+//         const availableSlots = MAX_SCREENSHOTS - state.screenshots.length;
+//         const framesToAdd = data.frames.slice(0, availableSlots);
+
+//         if (framesToAdd.length > 0) {
+//           state.screenshots.push(...framesToAdd);
+//           state.videoFrames = framesToAdd;
+//           saveSession();
+//           renderGrid();
+//           updateGenerateBtn();
+
+//           // Show video frames indicator
+//           videoPreview.style.display = "block";
+//           btnRecord.style.display = "none";
+
+//           showToast(`${framesToAdd.length} video frames added!`, "success");
+//         }
+
+//         // Add transcript to notes if available
+//         if (data.transcript && data.transcript.trim()) {
+//           const existingNotes = noteInput.value.trim();
+//           const transcriptText = `[Video transcript] ${data.transcript.trim()}`;
+
+//           if (existingNotes) {
+//             noteInput.value = existingNotes + "\n\n" + transcriptText;
+//           } else {
+//             noteInput.value = transcriptText;
+//           }
+//           saveSession();
+//           updateGenerateBtn();
+//           showToast("Voice transcript added to notes!", "info");
+//         }
+
+//         // Clear the recording data
+//         chrome.storage.local.remove(VIDEO_RECORDING_KEY);
+//       }
+//       resolve();
+//     });
+//   });
+// }
+
+// Delete video frames
+// btnDeleteVideo.addEventListener("click", async () => {
+//   if (state.videoFrames.length === 0) return;
+
+//   const confirmed = await showConfirmDialog(
+//     "Delete Video Frames?",
+//     `Remove all ${state.videoFrames.length} video frames?`,
+//     "Delete"
+//   );
+//   if (!confirmed) return;
+
+//   // Remove video frames from screenshots
+//   state.screenshots = state.screenshots.filter(s => !state.videoFrames.includes(s));
+//   state.videoFrames = [];
+
+//   // Reset UI
+//   videoPreview.style.display = "none";
+//   btnRecord.style.display = "block";
+
+//   saveSession();
+//   renderGrid();
+//   updateGenerateBtn();
+//   showToast("Video frames deleted", "info");
+// });
+
+// ── Clear all screenshots ──────────────────────────────────────────────────
+btnClearAll.addEventListener("click", async () => {
+  const count = state.screenshots.length;
+  if (count === 0) return;
+
+  const confirmed = await showConfirmDialog(
+    "Clear All Screenshots?",
+    `Remove all ${count} screenshots? This cannot be undone.`,
+    "Clear All"
+  );
+  if (!confirmed) return;
+
+  state.screenshots = [];
+  saveSession();
+  renderGrid();
+  updateGenerateBtn();
+  showToast(`${count} screenshots cleared`, "info");
+});
+
 // ── Generate ──────────────────────────────────────────────────────────────────
 function updateGenerateBtn() {
-  const has = state.screenshots.length > 0;
-  btnGenerate.disabled = !has;
-  btnGenerate.innerHTML = has
-    ? `<span>✨</span> Generate Ticket`
-    : `<span>📸</span> Capture a screenshot first`;
+  const hasScreenshots = state.screenshots.length > 0;
+  const hasNotes = noteInput.value.trim().length > 0;
+  const canGenerate = hasScreenshots || hasNotes; // Allow either screenshots OR notes
+
+  btnGenerate.disabled = !canGenerate;
+  if (canGenerate) {
+    btnGenerate.innerHTML = `<span>✨</span> Generate Ticket`;
+  } else {
+    btnGenerate.innerHTML = `<span>📝</span> Add screenshot or notes first`;
+  }
 }
 
 btnGenerate.addEventListener("click", async () => {
-  if (state.screenshots.length === 0) return;
+  const hasScreenshots = state.screenshots.length > 0;
+  const hasNotes = noteInput.value.trim().length > 0;
+
+  if (!hasScreenshots && !hasNotes) return;
   setLoading(true); clearError();
 
   const fullNote = [
@@ -380,22 +689,30 @@ btnGenerate.addEventListener("click", async () => {
         screenInfo
       }
     });
-    if (res?.ok) {
+    if (res?.ok && res.generationId) {
+      // Generation started in background - store ID and start polling
+      state.currentGenerationId = res.generationId;
+      loadingText.textContent = "Gemini is analyzing screenshots…";
+      startGenerationPolling();
+    } else if (res?.ok && res.ticket) {
+      // Direct response (legacy support)
       showResult(res.ticket);
+      setLoading(false);
       showToast("Ticket generated successfully!", "success");
     } else {
+      setLoading(false);
       showError("Gemini error: " + (res?.error || "Check API key in Settings ⚙️"));
     }
   } catch (e) {
-    showError("Failed: " + e.message);
-  } finally {
     setLoading(false);
+    showError("Failed: " + e.message);
   }
 });
 
 // ── Result ────────────────────────────────────────────────────────────────────
 function showResult(ticket) {
   resultTextarea.value = ticket;
+  state.chatHistory = []; // Clear chat history for fresh generation
   displayResultPanel();
 
   // Save the result so it persists across popup close/reopen
@@ -412,6 +729,23 @@ function displayResultPanel() {
   capturePanel.style.display = "none";
   resultPanel.classList.add("visible");
   ["step-1","step-2","step-3"].forEach(id => $( id).className = "step done");
+
+  // Populate edit inputs with current values
+  editNote.value = noteInput.value;
+  editComponent.value = fieldComp.value;
+  editSeverity.value = fieldSev.value;
+
+  // Show/hide edit fields based on settings
+  const editCompGroup = $("edit-component-group");
+  const editSevGroup = $("edit-severity-group");
+  if (editCompGroup) editCompGroup.style.display = state.enabledFields.includes("component") ? "block" : "none";
+  if (editSevGroup) editSevGroup.style.display = state.enabledFields.includes("severity") ? "block" : "none";
+
+  // Reset expanded state
+  inputEditSection.classList.remove("expanded");
+
+  // Render chat history
+  renderChatHistory();
 
   // Show screenshot previews if there are screenshots
   const screenshotsContainer = $("result-screenshots");
@@ -488,7 +822,62 @@ btnCopy.addEventListener("click", async () => {
 btnRegen.addEventListener("click", () => {
   resultPanel.classList.remove("visible");
   capturePanel.style.display = "block";
+  inputEditSection.classList.remove("expanded");
   btnGenerate.click();
+});
+
+// ── Input Edit Section Toggle ─────────────────────────────────────────────────
+inputEditToggle.addEventListener("click", () => {
+  inputEditSection.classList.toggle("expanded");
+});
+
+// ── Regenerate from Edit Section ──────────────────────────────────────────────
+btnRegenEdit.addEventListener("click", async () => {
+  if (state.screenshots.length === 0) return;
+
+  // Update main inputs from edit fields
+  noteInput.value = editNote.value;
+  fieldComp.value = editComponent.value;
+  fieldSev.value = editSeverity.value;
+  saveSession();
+
+  // Show loading state
+  btnRegenEdit.disabled = true;
+  btnRegenEdit.innerHTML = `<span>⏳</span> Regenerating…`;
+
+  const fullNote = [
+    editNote.value.trim(),
+    state.enabledFields.includes("component") && editComponent.value.trim() ? `Component/Area: ${editComponent.value.trim()}` : "",
+    state.enabledFields.includes("severity") ? `Severity: ${editSeverity.value}` : ""
+  ].filter(Boolean).join("\n");
+
+  const screenInfo = `${window.screen.width}x${window.screen.height} (viewport: ${window.innerWidth}x${window.innerHeight})`;
+
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "GENERATE_TICKET",
+      payload: {
+        screenshots: state.screenshots,
+        audioNote: fullNote,
+        pageUrl: state.pageUrl,
+        pageTitle: state.pageTitle,
+        screenInfo
+      }
+    });
+    if (res?.ok) {
+      resultTextarea.value = res.ticket;
+      saveResult();
+      inputEditSection.classList.remove("expanded");
+      showToast("Ticket regenerated!", "success");
+    } else {
+      showToast("Error: " + (res?.error || "Failed to regenerate"), "error");
+    }
+  } catch (e) {
+    showToast("Error: " + e.message, "error");
+  } finally {
+    btnRegenEdit.disabled = false;
+    btnRegenEdit.innerHTML = `<span>✨</span> Regenerate Ticket`;
+  }
 });
 
 btnReset.addEventListener("click", async () => {
@@ -501,12 +890,21 @@ btnReset.addEventListener("click", async () => {
 
   state.screenshots = [];
   state.hasRestoredResult = false;
+  state.chatHistory = [];
+  state.videoBlob = null;
+  state.videoFrames = [];
   noteInput.value = ""; fieldComp.value = ""; fieldSev.value = "Medium";
   resultTextarea.value = "";
   clearSession();
   resultPanel.classList.remove("visible");
   capturePanel.style.display = "block";
   $("result-screenshots").style.display = "none";
+  chatHistory.innerHTML = "";
+
+  // Reset video UI
+  videoPreview.style.display = "none";
+  btnRecord.style.display = "block";
+
   renderGrid(); updateGenerateBtn(); clearError();
   showToast("Bug report cleared", "info");
 });
@@ -606,6 +1004,78 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") $("preview-modal").classList.remove("visible");
     if (e.key === "ArrowLeft") $("preview-prev").click();
     if (e.key === "ArrowRight") $("preview-next").click();
+  }
+});
+
+// ── Chat with AI ──────────────────────────────────────────────────────────────
+function renderChatHistory() {
+  chatHistory.innerHTML = "";
+  state.chatHistory.forEach(msg => {
+    const div = document.createElement("div");
+    div.className = `chat-message ${msg.role}`;
+    div.textContent = msg.content;
+    chatHistory.appendChild(div);
+  });
+  // Scroll to bottom
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
+btnImprove.addEventListener("click", async () => {
+  const feedback = chatInput.value.trim();
+  if (!feedback) return;
+  if (!resultTextarea.value) return;
+
+  // Add user message to chat
+  state.chatHistory.push({ role: "user", content: feedback });
+  renderChatHistory();
+  chatInput.value = "";
+
+  // Show loading state
+  btnImprove.disabled = true;
+  btnImprove.classList.add("loading");
+  btnImprove.innerHTML = "<span>⟳</span>";
+
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "IMPROVE_TICKET",
+      payload: {
+        currentTicket: resultTextarea.value,
+        feedback,
+        chatHistory: state.chatHistory,
+        screenshots: state.screenshots
+      }
+    });
+
+    if (res?.ok && res.ticket) {
+      // Add AI response to chat
+      state.chatHistory.push({ role: "ai", content: "Ticket updated ✓" });
+      renderChatHistory();
+
+      // Update ticket
+      resultTextarea.value = res.ticket;
+      saveResult();
+      showToast("Ticket improved!", "success");
+    } else {
+      state.chatHistory.push({ role: "ai", content: "Error: " + (res?.error || "Failed") });
+      renderChatHistory();
+      showToast("Error: " + (res?.error || "Failed"), "error");
+    }
+  } catch (e) {
+    state.chatHistory.push({ role: "ai", content: "Error: " + e.message });
+    renderChatHistory();
+    showToast("Error: " + e.message, "error");
+  } finally {
+    btnImprove.disabled = false;
+    btnImprove.classList.remove("loading");
+    btnImprove.innerHTML = "<span>↑</span>";
+  }
+});
+
+// Allow Enter to send (Shift+Enter for newline)
+chatInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    btnImprove.click();
   }
 });
 

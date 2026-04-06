@@ -1,5 +1,8 @@
 // background.js — BugReporter service worker
 
+// ── Generation State Storage Key ─────────────────────────────────────────────
+const GENERATION_STATE_KEY = "bugReporterGenerationState";
+
 // ── Storage helpers ───────────────────────────────────────────────────────────
 async function getApiKey() {
   return new Promise((resolve, reject) => {
@@ -13,6 +16,25 @@ async function getApiKey() {
 async function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get("bugReporterSettings", (r) => resolve(r.bugReporterSettings || {}));
+  });
+}
+
+// ── Generation State Management ───────────────────────────────────────────────
+async function setGenerationState(state) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [GENERATION_STATE_KEY]: state }, resolve);
+  });
+}
+
+async function getGenerationState() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(GENERATION_STATE_KEY, (r) => resolve(r[GENERATION_STATE_KEY] || null));
+  });
+}
+
+async function clearGenerationState() {
+  return new Promise((resolve) => {
+    chrome.storage.local.remove(GENERATION_STATE_KEY, resolve);
   });
 }
 
@@ -72,7 +94,7 @@ function getBrowserInfo() {
 }
 
 // ── Build prompt ──────────────────────────────────────────────────────────────
-function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo }) {
+function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasScreenshots = true }) {
   const {
     domainContext          = "",
     techStack              = "",
@@ -104,13 +126,17 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo }) {
     ...customSections.map(name => `## ${name}\n[${name} — be brief]`),
   ];
 
+  const screenshotInstruction = hasScreenshots
+    ? `\nAnalyze the screenshots carefully. Use present tense. No markdown code blocks in output.`
+    : `\nUse the provided notes/context to understand the bug. Use present tense. No markdown code blocks in output.`;
+
   const systemPrompt = [
     `You are a QA engineer writing a bug report. Be CONCISE and MINIMAL.`,
     `Each section should be 1-3 lines maximum unless more is truly needed.`,
     `No filler words, no padding, no repetition between sections.`,
     domainContext ? `\nPRODUCT CONTEXT: ${domainContext}` : "",
     techStack     ? `TECH STACK: ${techStack}` : "",
-    `\nAnalyze the screenshots carefully. Use present tense. No markdown code blocks in output.`,
+    screenshotInstruction,
   ].filter(Boolean).join("\n");
 
   const rules = [];
@@ -133,22 +159,29 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo }) {
 async function callGeminiVision({ screenshots, audioNote, pageUrl, pageTitle, screenInfo }) {
   const [apiKey, settings] = await Promise.all([getApiKey(), getSettings()]);
 
-  const imageParts = screenshots.map(b64 => ({
-    inline_data: { mime_type: "image/png", data: b64.replace(/^data:image\/png;base64,/, "") }
-  }));
+  const hasScreenshots = screenshots && screenshots.length > 0;
+  const { systemPrompt, userPrompt } = buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasScreenshots });
 
-  const contentParts = [];
-  screenshots.forEach((_, i) => {
-    contentParts.push({ text: `--- Screenshot ${i+1} ---` });
-    contentParts.push(imageParts[i]);
-  });
+  const contentParts = [{ text: systemPrompt }];
 
-  const { systemPrompt, userPrompt } = buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo });
+  // Only include screenshots if they exist
+  if (hasScreenshots) {
+    const imageParts = screenshots.map(b64 => ({
+      inline_data: { mime_type: "image/png", data: b64.replace(/^data:image\/png;base64,/, "") }
+    }));
+
+    screenshots.forEach((_, i) => {
+      contentParts.push({ text: `--- Screenshot ${i+1} ---` });
+      contentParts.push(imageParts[i]);
+    });
+  }
+
+  contentParts.push({ text: userPrompt });
 
   const body = {
     contents: [{
       role: "user",
-      parts: [{ text: systemPrompt }, ...contentParts, { text: userPrompt }]
+      parts: contentParts
     }],
     generationConfig: { temperature: 0.2, maxOutputTokens: 1024 }
   };
@@ -174,9 +207,9 @@ async function callGeminiVision({ screenshots, audioNote, pageUrl, pageTitle, sc
   let text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("Empty response from Gemini");
 
-  // Check if screenshots section is enabled - if so, append embedded images
+  // Check if screenshots section is enabled and we have screenshots - if so, append embedded images
   const enabledSections = settings.enabledSections || [];
-  if (enabledSections.includes("screenshots")) {
+  if (enabledSections.includes("screenshots") && hasScreenshots) {
     // Build HTML img tags for rich text pasting
     const screenshotSection = screenshots.map((dataUrl, i) =>
       `<img src="${dataUrl}" alt="Screenshot ${i + 1}" width="600" />`
@@ -237,9 +270,69 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === "GENERATE_TICKET") {
     const { screenshots, audioNote, pageUrl, pageTitle, screenInfo } = msg.payload;
-    callGeminiVision({ screenshots, audioNote, pageUrl, pageTitle, screenInfo })
+    const generationId = Date.now().toString();
+
+    // Store generation state immediately (before async work)
+    setGenerationState({
+      isGenerating: true,
+      generationId,
+      startTime: Date.now(),
+      payload: msg.payload
+    }).then(() => {
+      // Run generation (this continues even if popup closes)
+      callGeminiVision({ screenshots, audioNote, pageUrl, pageTitle, screenInfo })
+        .then(async (ticket) => {
+          // Store result
+          await setGenerationState({
+            isGenerating: false,
+            generationId,
+            completedAt: Date.now(),
+            ticket,
+            error: null
+          });
+          // Try to notify popup if it's open
+          try {
+            chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, ticket });
+          } catch (e) { /* popup closed, that's fine */ }
+        })
+        .catch(async (err) => {
+          // Store error
+          await setGenerationState({
+            isGenerating: false,
+            generationId,
+            completedAt: Date.now(),
+            ticket: null,
+            error: err.message
+          });
+          // Try to notify popup
+          try {
+            chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, error: err.message });
+          } catch (e) { /* popup closed */ }
+        });
+    });
+
+    // Respond immediately with generation ID
+    sendResponse({ ok: true, generationId, generating: true });
+    return true;
+  }
+
+  if (msg.type === "CHECK_GENERATION_STATUS") {
+    getGenerationState().then(state => {
+      sendResponse({ state });
+    });
+    return true;
+  }
+
+  if (msg.type === "CLEAR_GENERATION_STATE") {
+    clearGenerationState().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (msg.type === "IMPROVE_TICKET") {
+    const { currentTicket, feedback, chatHistory, screenshots } = msg.payload;
+    improveTicket({ currentTicket, feedback, chatHistory, screenshots })
       .then(ticket => sendResponse({ ok: true, ticket }))
-      .catch(err   => sendResponse({ ok: false, error: err.message }));
+      .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
 
@@ -268,4 +361,67 @@ async function testApiKey(apiKey) {
   }
 
   return true;
+}
+
+// ── Improve Ticket via Chat ───────────────────────────────────────────────────
+async function improveTicket({ currentTicket, feedback, chatHistory, screenshots }) {
+  const apiKey = await getApiKey();
+
+  // Build conversation context from chat history
+  const historyContext = chatHistory
+    .map(msg => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
+    .join("\n");
+
+  const systemPrompt = `You are a QA engineer helping to improve a bug report ticket based on user feedback.
+You will receive the current ticket and user's feedback. Make the requested changes while keeping the same format and structure.
+Be concise. Only change what the user asks for. Return ONLY the improved ticket text, no explanations.`;
+
+  const userPrompt = `CURRENT TICKET:
+${currentTicket}
+
+${historyContext ? `PREVIOUS FEEDBACK:\n${historyContext}\n` : ""}
+NEW FEEDBACK:
+${feedback}
+
+Please improve the ticket based on this feedback. Return only the updated ticket.`;
+
+  // Include screenshots for context if available
+  const imageParts = screenshots.map(b64 => ({
+    inline_data: { mime_type: "image/png", data: b64.replace(/^data:image\/png;base64,/, "") }
+  }));
+
+  const contentParts = [{ text: systemPrompt }];
+  if (screenshots.length > 0) {
+    contentParts.push({ text: "Context screenshots:" });
+    imageParts.forEach(img => contentParts.push(img));
+  }
+  contentParts.push({ text: userPrompt });
+
+  const body = {
+    contents: [{ role: "user", parts: contentParts }],
+    generationConfig: { temperature: 0.3, maxOutputTokens: 1024 }
+  };
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey
+      },
+      body: JSON.stringify(body)
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err?.error?.message || `API error ${response.status}`);
+  }
+
+  const data = await response.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Empty response from Gemini");
+
+  return text;
 }

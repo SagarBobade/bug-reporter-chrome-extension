@@ -270,6 +270,106 @@
       border-radius: 3px;
     }
 
+    .btn-capture.btn-annotate {
+      margin-bottom: 14px;
+      border-color: var(--accent2);
+      color: var(--accent2);
+    }
+    .btn-capture.btn-annotate:hover {
+      border-color: var(--accent2);
+      color: var(--accent2);
+      background: rgba(255, 107, 53, 0.08);
+    }
+
+    /* ── Video Recording Section ────────────────────────────── */
+    .video-section {
+      margin-bottom: 14px;
+    }
+    .btn-capture.btn-record {
+      margin-bottom: 8px;
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+    .btn-capture.btn-record:hover {
+      border-color: var(--danger);
+      color: var(--danger);
+      background: rgba(248, 113, 113, 0.08);
+    }
+    .btn-capture.btn-record.recording {
+      background: var(--danger);
+      color: #fff;
+      border-color: var(--danger);
+      animation: pulse-record 1.5s infinite;
+    }
+    @keyframes pulse-record {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.8; }
+    }
+    .recording-ui {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: rgba(248, 113, 113, 0.1);
+      border: 1px solid var(--danger);
+      border-radius: var(--radius);
+      margin-bottom: 8px;
+    }
+    .recording-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .recording-dot {
+      width: 10px;
+      height: 10px;
+      background: var(--danger);
+      border-radius: 50%;
+      animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    #recording-timer {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--danger);
+    }
+    .video-preview {
+      position: relative;
+      margin-bottom: 8px;
+    }
+    .video-thumbnail {
+      width: 100%;
+      max-height: 120px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface2);
+    }
+    .video-preview .thumb-del {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      opacity: 1;
+    }
+    .video-frames-info {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .video-frames-info .thumb-del {
+      position: static;
+      opacity: 1;
+    }
+
     /* ── Voice note ──────────────────────────────────────── */
     .voice-row {
       display: flex;
@@ -475,6 +575,182 @@
     }
     .result-textarea:focus { border-color: var(--accent); }
 
+    /* ── Input Edit Section (Result Panel) ────────────────── */
+    .input-edit-section {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .input-edit-toggle {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--surface2);
+      border: none;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .input-edit-toggle:hover {
+      color: var(--text);
+      background: var(--surface);
+    }
+    .input-edit-toggle .toggle-icon {
+      transition: transform 0.2s;
+      font-size: 8px;
+    }
+    .input-edit-section.expanded .toggle-icon {
+      transform: rotate(90deg);
+    }
+    .input-edit-body {
+      display: none;
+      padding: 10px 12px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+    }
+    .input-edit-section.expanded .input-edit-body {
+      display: block;
+    }
+    .edit-field {
+      margin-bottom: 8px;
+    }
+    .edit-field label {
+      display: block;
+      font-size: 9px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .edit-input {
+      width: 100%;
+      padding: 6px 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .edit-input:focus { border-color: var(--accent); }
+    .edit-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .btn-regenerate {
+      width: 100%;
+      padding: 8px;
+      background: var(--accent);
+      border: none;
+      border-radius: 4px;
+      color: #000;
+      font-family: 'Syne', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s;
+      margin-top: 4px;
+    }
+    .btn-regenerate:hover { background: #d4e83c; }
+    .btn-regenerate:disabled {
+      background: var(--surface2);
+      color: var(--muted);
+      cursor: not-allowed;
+    }
+
+    /* ── Chat Section (Result Panel) ─────────────────────── */
+    .chat-section {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+    .chat-history {
+      max-height: 100px;
+      overflow-y: auto;
+      margin-bottom: 8px;
+    }
+    .chat-message {
+      padding: 6px 10px;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 10px;
+      line-height: 1.4;
+    }
+    .chat-message.user {
+      background: var(--accent);
+      color: #000;
+      margin-left: 20%;
+      text-align: right;
+    }
+    .chat-message.ai {
+      background: var(--surface2);
+      color: var(--muted);
+      margin-right: 20%;
+    }
+    .chat-input-row {
+      display: flex;
+      gap: 6px;
+      align-items: flex-end;
+    }
+    .chat-input {
+      flex: 1;
+      padding: 8px 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      resize: none;
+      outline: none;
+      transition: border-color 0.2s;
+      line-height: 1.4;
+    }
+    .chat-input:focus { border-color: var(--accent); }
+    .chat-input::placeholder { color: var(--muted); }
+    .btn-improve {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius);
+      background: var(--accent);
+      border: none;
+      color: #000;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-improve:hover { background: #d4e83c; }
+    .btn-improve:disabled {
+      background: var(--surface2);
+      color: var(--muted);
+      cursor: not-allowed;
+    }
+    .btn-improve.loading span {
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
     /* ── Error ───────────────────────────────────────────── */
     .error-box {
       padding: 10px 12px;
@@ -504,6 +780,24 @@
       height: 16px;
       border-radius: 50%;
       margin-left: 4px;
+    }
+
+    /* ── Clear All Button ─────────────────────────────────── */
+    .btn-clear-all {
+      margin-left: auto;
+      padding: 2px 8px;
+      background: transparent;
+      border: 1px solid var(--danger);
+      border-radius: 4px;
+      color: var(--danger);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-clear-all:hover {
+      background: var(--danger);
+      color: #fff;
     }
 
     /* ── Reset link ──────────────────────────────────────── */
@@ -764,6 +1058,7 @@
     <div class="section-label">
       Screenshots
       <span id="shot-count" style="display:none" class="count-badge">0</span>
+      <button id="btn-clear-all" class="btn-clear-all" style="display:none" title="Clear all screenshots">✕ Clear All</button>
     </div>
 
     <div class="screenshot-grid" id="screenshot-grid">
@@ -775,6 +1070,27 @@
       Capture current screen
       <span class="shortcut">click</span>
     </button>
+
+    <button class="btn-capture btn-annotate" id="btn-annotate">
+      <span>✏️</span>
+      Capture & Annotate
+      <span class="shortcut">crop/mark</span>
+    </button>
+
+    <!-- Video Recording Section -->
+    <!-- <div id="video-section" class="video-section">
+      <button class="btn-capture btn-record" id="btn-record">
+        <span>🎬</span>
+        Record Video
+        <span class="shortcut">new tab</span>
+      </button>
+      <div id="video-preview" class="video-preview" style="display: none;">
+        <div class="video-frames-info">
+          <span>🎬 Video frames added</span>
+          <button class="thumb-del" id="btn-delete-video" title="Remove video frames">✕</button>
+        </div>
+      </div>
+    </div> -->
 
     <div class="section-label">Notes / Context</div>
 
@@ -826,10 +1142,54 @@
 
     <textarea class="result-textarea" id="result-textarea" readonly></textarea>
 
+    <!-- Collapsible Input Edit Section -->
+    <div id="input-edit-section" class="input-edit-section">
+      <button class="input-edit-toggle" id="input-edit-toggle">
+        <span class="toggle-icon">▶</span>
+        <span>Edit Input & Regenerate</span>
+      </button>
+      <div class="input-edit-body" id="input-edit-body">
+        <div class="edit-field">
+          <label>Notes / Context</label>
+          <textarea id="edit-note" class="edit-input" rows="2" placeholder="Describe the bug..."></textarea>
+        </div>
+        <div class="edit-row">
+          <div class="edit-field" id="edit-component-group">
+            <label>Component</label>
+            <input type="text" id="edit-component" class="edit-input" placeholder="e.g. Checkout" />
+          </div>
+          <div class="edit-field" id="edit-severity-group">
+            <label>Severity</label>
+            <select id="edit-severity" class="edit-input">
+              <option value="Critical">🔴 Critical</option>
+              <option value="High">🟠 High</option>
+              <option value="Medium" selected>🟡 Medium</option>
+              <option value="Low">🟢 Low</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn-regenerate" id="btn-regenerate-edit">
+          <span>✨</span> Regenerate Ticket
+        </button>
+      </div>
+    </div>
+
     <!-- Screenshot previews for easy copying -->
     <div id="result-screenshots" style="display:none; margin-top: 10px;">
       <div class="section-label" style="margin-bottom: 6px;">Screenshots (right-click to copy)</div>
       <div id="result-screenshots-grid" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+    </div>
+
+    <!-- Chat with AI Section -->
+    <div id="chat-section" class="chat-section">
+      <div class="section-label" style="margin-bottom: 6px;">Refine with AI</div>
+      <div id="chat-history" class="chat-history"></div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" class="chat-input" placeholder="e.g. Make it shorter, add more steps, focus on the login issue..." rows="2"></textarea>
+        <button id="btn-improve" class="btn-improve" title="Send feedback to AI">
+          <span>↑</span>
+        </button>
+      </div>
     </div>
 
     <div style="margin-top: 8px; display: flex; justify-content: flex-end;">

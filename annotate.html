@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Annotate Screenshot - BugReporter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0c0c0f;
+      --surface: #141418;
+      --surface2: #1c1c22;
+      --border: #2a2a33;
+      --accent: #e8ff47;
+      --accent2: #ff6b35;
+      --text: #f0f0f5;
+      --muted: #6b6b7a;
+      --success: #4ade80;
+      --danger: #f87171;
+      --radius: 8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ─────────────────────────────────────────────── */
+    .header {
+      padding: 12px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .header h1 {
+      font-size: 16px;
+      font-weight: 700;
+      flex: 1;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn:hover { border-color: var(--accent); color: var(--accent); }
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #000;
+    }
+    .btn.primary:hover { background: #d4e83c; }
+    .btn.danger { border-color: var(--danger); color: var(--danger); }
+    .btn.danger:hover { background: var(--danger); color: #fff; }
+
+    /* ── Toolbar ─────────────────────────────────────────────── */
+    .toolbar {
+      padding: 10px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .tool-group {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      background: var(--surface2);
+      border-radius: var(--radius);
+    }
+
+    .tool-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 4px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .tool-btn:hover { color: var(--text); background: var(--bg); }
+    .tool-btn.active { color: var(--accent); background: var(--bg); }
+
+    .color-picker-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .color-picker-label {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+    }
+
+    .color-picker {
+      width: 32px;
+      height: 32px;
+      border: 2px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      background: none;
+      padding: 0;
+    }
+
+    .size-slider-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .size-slider {
+      width: 80px;
+      height: 4px;
+      -webkit-appearance: none;
+      background: var(--border);
+      border-radius: 2px;
+      outline: none;
+    }
+
+    .size-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      background: var(--accent);
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    .size-value {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      min-width: 24px;
+    }
+
+    /* ── Canvas Area ─────────────────────────────────────────── */
+    .canvas-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow: auto;
+      background: var(--bg);
+    }
+
+    .canvas-wrapper {
+      position: relative;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    #canvas {
+      display: block;
+      cursor: crosshair;
+    }
+
+    /* Crop overlay */
+    .crop-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      pointer-events: none;
+      display: none;
+    }
+
+    .crop-overlay.active {
+      display: block;
+      pointer-events: auto;
+      background: rgba(0,0,0,0.5);
+    }
+
+    .crop-selection {
+      position: absolute;
+      border: 2px dashed var(--accent);
+      background: transparent;
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);
+    }
+
+    /* ── Instructions ─────────────────────────────────────────── */
+    .instructions {
+      padding: 8px 20px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    /* ── Toast ─────────────────────────────────────────────────── */
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      background: var(--success);
+      color: #000;
+      border-radius: var(--radius);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      animation: toast-in 0.3s ease-out;
+      z-index: 1000;
+    }
+
+    .toast.error { background: var(--danger); color: #fff; }
+    .toast.hiding { animation: toast-out 0.2s ease-in forwards; }
+
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes toast-out {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <h1>📝 Annotate Screenshot</h1>
+  <div class="header-actions">
+    <button class="btn danger" id="btn-discard">✕ Discard</button>
+    <button class="btn primary" id="btn-save">✓ Save & Add to Report</button>
+  </div>
+</header>
+
+<div class="toolbar">
+  <div class="tool-group">
+    <button class="tool-btn active" data-tool="draw" title="Freehand Draw">✏️</button>
+    <button class="tool-btn" data-tool="arrow" title="Arrow">➜</button>
+    <button class="tool-btn" data-tool="rect" title="Rectangle">▢</button>
+    <button class="tool-btn" data-tool="highlight" title="Highlight">🖍️</button>
+    <button class="tool-btn" data-tool="text" title="Text">T</button>
+    <button class="tool-btn" data-tool="crop" title="Crop">✂️</button>
+  </div>
+
+  <div class="color-picker-wrapper">
+    <span class="color-picker-label">Color:</span>
+    <input type="color" class="color-picker" id="color-picker" value="#ff6b35" />
+  </div>
+
+  <div class="size-slider-wrapper">
+    <span class="color-picker-label">Size:</span>
+    <input type="range" class="size-slider" id="size-slider" min="1" max="20" value="4" />
+    <span class="size-value" id="size-value">4</span>
+  </div>
+
+  <div class="tool-group">
+    <button class="tool-btn" id="btn-undo" title="Undo (Ctrl+Z)">↶</button>
+    <button class="tool-btn" id="btn-redo" title="Redo (Ctrl+Y)">↷</button>
+  </div>
+
+  <div class="tool-group">
+    <button class="tool-btn" id="btn-clear" title="Clear All Annotations">🗑️</button>
+  </div>
+</div>
+
+<div class="canvas-container">
+  <div class="canvas-wrapper">
+    <canvas id="canvas"></canvas>
+    <div class="crop-overlay" id="crop-overlay">
+      <div class="crop-selection" id="crop-selection"></div>
+    </div>
+  </div>
+</div>
+
+<div class="instructions" id="instructions">
+  Select a tool and draw on the screenshot. Click "Save & Add to Report" when done.
+</div>
+
+<script src="annotate.js"></script>
+</body>
+</html>

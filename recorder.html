@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Recording - BugReporter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0c0c0f;
+      --surface: #141418;
+      --surface2: #1c1c22;
+      --border: #2a2a33;
+      --accent: #e8ff47;
+      --text: #f0f0f5;
+      --muted: #6b6b7a;
+      --success: #4ade80;
+      --danger: #f87171;
+      --radius: 12px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .container {
+      text-align: center;
+      padding: 40px;
+      max-width: 500px;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 30px;
+    }
+
+    .recording-status {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 30px;
+      padding: 20px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+
+    .recording-dot {
+      width: 16px;
+      height: 16px;
+      background: var(--danger);
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.9); }
+    }
+
+    .timer {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 32px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .preview-container {
+      margin-bottom: 20px;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+    }
+
+    #preview {
+      width: 100%;
+      max-height: 300px;
+      object-fit: contain;
+      display: block;
+    }
+
+    .btn {
+      padding: 14px 32px;
+      border-radius: var(--radius);
+      font-family: 'Syne', sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn.stop {
+      background: var(--danger);
+      color: #fff;
+    }
+
+    .btn.stop:hover {
+      background: #ef5350;
+      transform: scale(1.02);
+    }
+
+    .btn.save {
+      background: var(--accent);
+      color: #000;
+    }
+
+    .btn.save:hover {
+      background: #d4e83c;
+    }
+
+    .btn.discard {
+      background: var(--surface2);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      margin-left: 10px;
+    }
+
+    .btn.discard:hover {
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    .actions {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    .info {
+      margin-top: 20px;
+      font-size: 12px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .hidden { display: none !important; }
+
+    /* Completed state */
+    .completed .recording-dot {
+      background: var(--success);
+      animation: none;
+    }
+
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      background: var(--success);
+      color: #000;
+      border-radius: var(--radius);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎬 Screen Recording</h1>
+    <p class="subtitle" id="subtitle">Recording in progress. Speak to describe the bug!</p>
+
+    <div class="recording-status" id="recording-status">
+      <div class="recording-dot" id="recording-dot"></div>
+      <div class="timer" id="timer">00:00</div>
+    </div>
+
+    <div class="preview-container">
+      <video id="preview" autoplay muted></video>
+    </div>
+
+    <div class="actions" id="actions-recording">
+      <button class="btn stop" id="btn-stop">
+        <span>⏹</span> Stop Recording
+      </button>
+    </div>
+
+    <div class="actions hidden" id="actions-done">
+      <button class="btn save" id="btn-save">
+        <span>✓</span> Save & Return
+      </button>
+      <button class="btn discard" id="btn-discard">
+        <span>✕</span> Discard
+      </button>
+    </div>
+
+    <p class="info" id="info">🎤 Voice is being transcribed. Speak clearly to describe the bug.</p>
+  </div>
+
+  <script src="recorder.js"></script>
+</body>
+</html>
