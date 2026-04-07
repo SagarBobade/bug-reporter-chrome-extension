@@ -15,6 +15,8 @@ const DEFAULT_SECTIONS = [
   { id: "context",         label: "Additional Context", default: true },
 ];
 
+const AI_PROVIDERS = ["gemini", "openai", "anthropic", "xai"];
+
 const $ = id => document.getElementById(id);
 let customSections = [];
 let isDirty = false;
@@ -31,30 +33,41 @@ async function loadSettings() {
 async function init() {
   const s = await loadSettings();
 
-  // API key
-  if (s.apiKey) $("apiKey").value = s.apiKey;
+  // AI Provider
+  const aiProvider = s.aiProvider || "gemini";
+  $("aiProvider").value = aiProvider;
+  showApiKeySection(aiProvider);
+
+  // API Keys
+  if (s.geminiApiKey) $("geminiApiKey").value = s.geminiApiKey;
+  if (s.openaiApiKey) $("openaiApiKey").value = s.openaiApiKey;
+  if (s.anthropicApiKey) $("anthropicApiKey").value = s.anthropicApiKey;
+  if (s.xaiApiKey) $("xaiApiKey").value = s.xaiApiKey;
+
+  // Legacy: migrate old apiKey to geminiApiKey
+  if (s.apiKey && !s.geminiApiKey) {
+    $("geminiApiKey").value = s.apiKey;
+  }
 
   // Domain
-  if (s.domainContext)     $("domainContext").value = s.domainContext;
-  if (s.techStack)         $("techStack").value = s.techStack;
+  if (s.domainContext) $("domainContext").value = s.domainContext;
+  if (s.techStack) $("techStack").value = s.techStack;
 
   // Summary - migrate old fields to new consolidated field if needed
-  if (s.summaryFormat)     $("summaryFormat").value = s.summaryFormat;
+  if (s.summaryFormat) $("summaryFormat").value = s.summaryFormat;
   if (s.summaryGuidelines) {
     $("summaryGuidelines").value = s.summaryGuidelines;
   } else if (s.summaryInclude || s.summaryExclude) {
-    // Migrate from old separate fields
     const migrated = [];
     if (s.summaryInclude) migrated.push("Include:\n" + s.summaryInclude);
     if (s.summaryExclude) migrated.push("Avoid:\n" + s.summaryExclude);
     $("summaryGuidelines").value = migrated.join("\n\n");
   }
 
-  // Description rules - migrate old fields to new consolidated field if needed
+  // Description rules
   if (s.descriptionGuidelines) {
     $("descriptionGuidelines").value = s.descriptionGuidelines;
   } else if (s.descInclude || s.descExclude) {
-    // Migrate from old separate fields
     const migrated = [];
     if (s.descInclude) migrated.push("Include:\n" + s.descInclude);
     if (s.descExclude) migrated.push("Avoid:\n" + s.descExclude);
@@ -67,15 +80,15 @@ async function init() {
   renderCustomSections();
 
   // Section checkboxes
-  const enabledSections = s.enabledSections || DEFAULT_SECTIONS.filter(s => s.default).map(s => s.id);
+  const enabledSections = s.enabledSections || DEFAULT_SECTIONS.filter(sec => sec.default).map(sec => sec.id);
   renderSectionsGrid(enabledSections);
 
   // Field checkboxes
-  const enabledFields = s.enabledFields || ["component", "severity"]; // Default both enabled
+  const enabledFields = s.enabledFields || ["component", "severity"];
   renderFieldGrid(enabledFields);
 
-  // Video recording setting (explicitly stored as videoRecordingEnabled for clarity)
-  const videoRecordingEnabled = s.videoRecordingEnabled || false;  // Default disabled
+  // Video recording setting
+  const videoRecordingEnabled = s.videoRecordingEnabled || false;
   renderVideoSettings(videoRecordingEnabled);
 
   // Mark clean
@@ -84,7 +97,82 @@ async function init() {
   // Listen for changes
   document.querySelectorAll("input, textarea, select").forEach(el => {
     el.addEventListener("input", () => setDirty(true));
+    el.addEventListener("change", () => setDirty(true));
   });
+
+  // AI Provider change handler
+  $("aiProvider").addEventListener("change", (e) => {
+    showApiKeySection(e.target.value);
+    setDirty(true);
+  });
+
+  // Setup reveal buttons for all API keys
+  document.querySelectorAll(".btn-reveal").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.dataset.target;
+      const input = $(targetId);
+      if (input) {
+        input.type = input.type === "password" ? "text" : "password";
+      }
+    });
+  });
+
+  // Setup test buttons for all API keys
+  document.querySelectorAll(".btn-test").forEach(btn => {
+    btn.addEventListener("click", () => testApiKey(btn.dataset.provider));
+  });
+}
+
+// ── Show/Hide API Key Sections ────────────────────────────────────────────────
+function showApiKeySection(provider) {
+  AI_PROVIDERS.forEach(p => {
+    const section = $(`${p}-key-section`);
+    if (section) {
+      section.style.display = p === provider ? "block" : "none";
+    }
+  });
+}
+
+// ── Test API Key ──────────────────────────────────────────────────────────────
+async function testApiKey(provider) {
+  const keyInput = $(`${provider}ApiKey`);
+  const apiKey = keyInput?.value.trim();
+  const btn = document.querySelector(`.btn-test[data-provider="${provider}"]`);
+  const result = document.querySelector(`.api-test-result[data-provider="${provider}"]`);
+
+  if (!apiKey) {
+    result.textContent = "Please enter an API key first";
+    result.className = "api-test-result visible error";
+    return;
+  }
+
+  // Show testing state
+  btn.disabled = true;
+  btn.textContent = "Testing...";
+  btn.classList.add("testing");
+  result.className = "api-test-result";
+
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "TEST_API_KEY",
+      provider: provider,
+      key: apiKey
+    });
+    if (res?.ok) {
+      result.textContent = "✓ Connection successful!";
+      result.className = "api-test-result visible success";
+    } else {
+      result.textContent = "✗ " + (res?.error || "Connection failed");
+      result.className = "api-test-result visible error";
+    }
+  } catch (err) {
+    result.textContent = "✗ " + err.message;
+    result.className = "api-test-result visible error";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Test";
+    btn.classList.remove("testing");
+  }
 }
 
 // ── Sections grid ─────────────────────────────────────────────────────────────
@@ -129,7 +217,6 @@ function renderFieldGrid(enabledFields) {
     const box = div.querySelector(".check-box");
     box.textContent = checked ? "✓" : "";
 
-    // Add click handler if not already added
     if (!div._hasHandler) {
       div.addEventListener("click", () => {
         div.classList.toggle("checked");
@@ -145,7 +232,7 @@ function renderFieldGrid(enabledFields) {
 function getEnabledFields() {
   return Array.from(document.querySelectorAll('.section-check.checked[data-field]'))
     .map(el => el.dataset.field)
-    .filter(f => f !== "videoRecording"); // Exclude video recording from field list
+    .filter(f => f !== "videoRecording");
 }
 
 // ── Video Recording Settings ─────────────────────────────────────────────────
@@ -157,7 +244,6 @@ function renderVideoSettings(enabled) {
   const box = videoCheck.querySelector(".check-box");
   box.textContent = enabled ? "✓" : "";
 
-  // Add click handler if not already added
   if (!videoCheck._hasHandler) {
     videoCheck.addEventListener("click", () => {
       videoCheck.classList.toggle("checked");
@@ -177,7 +263,6 @@ function isVideoRecordingEnabled() {
 // ── Custom sections ───────────────────────────────────────────────────────────
 function renderCustomSections() {
   const wrap = $("custom-sections-wrap");
-  // Remove existing tags
   wrap.querySelectorAll(".tag").forEach(t => t.remove());
   customSections.forEach((name, i) => {
     const tag = document.createElement("div");
@@ -210,53 +295,16 @@ $("custom-section-input").addEventListener("keydown", (e) => {
   }
 });
 
-// ── API key reveal toggle ─────────────────────────────────────────────────────
-$("btn-reveal").addEventListener("click", () => {
-  const input = $("apiKey");
-  input.type = input.type === "password" ? "text" : "password";
-});
-
-// ── API key test ─────────────────────────────────────────────────────────────
-$("btn-test").addEventListener("click", async () => {
-  const apiKey = $("apiKey").value.trim();
-  const btn = $("btn-test");
-  const result = $("api-test-result");
-
-  if (!apiKey) {
-    result.textContent = "Please enter an API key first";
-    result.className = "api-test-result visible error";
-    return;
-  }
-
-  // Show testing state
-  btn.disabled = true;
-  btn.textContent = "Testing...";
-  btn.classList.add("testing");
-  result.className = "api-test-result";
-
-  try {
-    const res = await chrome.runtime.sendMessage({ type: "TEST_API_KEY", key: apiKey });
-    if (res?.ok) {
-      result.textContent = "✓ Connection successful!";
-      result.className = "api-test-result visible success";
-    } else {
-      result.textContent = "✗ " + (res?.error || "Connection failed");
-      result.className = "api-test-result visible error";
-    }
-  } catch (err) {
-    result.textContent = "✗ " + err.message;
-    result.className = "api-test-result visible error";
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Test";
-    btn.classList.remove("testing");
-  }
-});
-
 // ── Save ──────────────────────────────────────────────────────────────────────
 $("btn-save").addEventListener("click", async () => {
+  const aiProvider = $("aiProvider").value;
+
   const settings = {
-    apiKey:               $("apiKey").value.trim(),
+    aiProvider:           aiProvider,
+    geminiApiKey:         $("geminiApiKey").value.trim(),
+    openaiApiKey:         $("openaiApiKey").value.trim(),
+    anthropicApiKey:      $("anthropicApiKey").value.trim(),
+    xaiApiKey:            $("xaiApiKey").value.trim(),
     domainContext:        $("domainContext").value.trim(),
     techStack:            $("techStack").value.trim(),
     summaryFormat:        $("summaryFormat").value.trim(),
@@ -269,12 +317,9 @@ $("btn-save").addEventListener("click", async () => {
     videoRecordingEnabled: isVideoRecordingEnabled(),
   };
 
-  // Also save API key separately so background.js can find it
+  // Save settings
   await new Promise(resolve => {
-    chrome.storage.local.set({
-      bugReporterSettings: settings,
-      geminiApiKey: settings.apiKey
-    }, resolve);
+    chrome.storage.local.set({ bugReporterSettings: settings }, resolve);
   });
 
   setDirty(false);
@@ -302,6 +347,7 @@ function setDirty(dirty) {
 // ── Export Settings ──────────────────────────────────────────────────────────
 $("btn-export").addEventListener("click", () => {
   const settings = {
+    aiProvider:           $("aiProvider").value,
     domainContext:        $("domainContext").value.trim(),
     techStack:            $("techStack").value.trim(),
     summaryFormat:        $("summaryFormat").value.trim(),
@@ -313,10 +359,10 @@ $("btn-export").addEventListener("click", () => {
     customSections,
     videoRecordingEnabled: isVideoRecordingEnabled(),
     exportedAt: new Date().toISOString(),
-    version: "1.0"
+    version: "1.1"
   };
 
-  // Note: API key is NOT exported for security reasons
+  // Note: API keys are NOT exported for security reasons
 
   const blob = new Blob([JSON.stringify(settings, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -344,12 +390,15 @@ $("import-file").addEventListener("change", async (e) => {
     const text = await file.text();
     const settings = JSON.parse(text);
 
-    // Validate it's a valid settings file
     if (!settings.version) {
       throw new Error("Invalid settings file format");
     }
 
     // Apply imported settings to form
+    if (settings.aiProvider) {
+      $("aiProvider").value = settings.aiProvider;
+      showApiKeySection(settings.aiProvider);
+    }
     if (settings.domainContext) $("domainContext").value = settings.domainContext;
     if (settings.techStack) $("techStack").value = settings.techStack;
     if (settings.summaryFormat) $("summaryFormat").value = settings.summaryFormat;
@@ -357,23 +406,19 @@ $("import-file").addEventListener("change", async (e) => {
     if (settings.descriptionGuidelines) $("descriptionGuidelines").value = settings.descriptionGuidelines;
     if (settings.extraInstructions) $("extraInstructions").value = settings.extraInstructions;
 
-    // Apply sections
     if (settings.enabledSections) {
       renderSectionsGrid(settings.enabledSections);
     }
 
-    // Apply fields
     if (settings.enabledFields) {
       renderFieldGrid(settings.enabledFields);
     }
 
-    // Apply custom sections
     if (settings.customSections) {
       customSections = settings.customSections;
       renderCustomSections();
     }
 
-    // Apply video recording setting
     if (typeof settings.videoRecordingEnabled === "boolean") {
       renderVideoSettings(settings.videoRecordingEnabled);
     }
@@ -385,7 +430,6 @@ $("import-file").addEventListener("change", async (e) => {
     showStatus("Failed to import: " + err.message, "error");
   }
 
-  // Reset file input
   e.target.value = "";
 });
 

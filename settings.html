@@ -326,21 +326,77 @@
 
 <div class="content">
 
-  <!-- Row 1: API Key + Domain Knowledge -->
-  <div class="row">
+  <!-- Row 1: AI Provider Selection -->
+  <div class="row full">
     <div class="section">
-      <div class="section-title">API Key</div>
-      <div class="field">
-        <label>Gemini API Key <span>stored locally</span></label>
-        <div class="key-row">
-          <input type="password" id="apiKey" placeholder="AIza..." />
-          <button class="btn-reveal" id="btn-reveal" title="Show/hide key">👁</button>
-          <button class="btn-test" id="btn-test" title="Test API connection">Test</button>
+      <div class="section-title">AI Provider</div>
+      <div class="section-desc">Choose your preferred AI model for generating bug reports. Each provider requires its own API key.</div>
+      <div class="field" style="margin-bottom: 12px;">
+        <label>Select AI Model</label>
+        <select id="aiProvider" style="padding: 10px 12px; font-size: 12px;">
+          <option value="gemini">Google Gemini 2.5 Flash</option>
+          <option value="openai">OpenAI GPT-4o</option>
+          <option value="anthropic">Anthropic Claude Sonnet</option>
+          <option value="xai">xAI Grok</option>
+        </select>
+      </div>
+
+      <!-- Gemini API Key -->
+      <div class="api-key-section" id="gemini-key-section">
+        <div class="field">
+          <label>Gemini API Key <span>Get from <a href="https://aistudio.google.com/apikey" target="_blank" style="color: var(--accent);">Google AI Studio</a></span></label>
+          <div class="key-row">
+            <input type="password" id="geminiApiKey" placeholder="AIza..." />
+            <button class="btn-reveal" data-target="geminiApiKey" title="Show/hide key">👁</button>
+            <button class="btn-test" data-provider="gemini" title="Test API connection">Test</button>
+          </div>
+          <div class="api-test-result" data-provider="gemini"></div>
         </div>
-        <div id="api-test-result" class="api-test-result"></div>
+      </div>
+
+      <!-- OpenAI API Key -->
+      <div class="api-key-section" id="openai-key-section" style="display: none;">
+        <div class="field">
+          <label>OpenAI API Key <span>Get from <a href="https://platform.openai.com/api-keys" target="_blank" style="color: var(--accent);">OpenAI Platform</a></span></label>
+          <div class="key-row">
+            <input type="password" id="openaiApiKey" placeholder="sk-..." />
+            <button class="btn-reveal" data-target="openaiApiKey" title="Show/hide key">👁</button>
+            <button class="btn-test" data-provider="openai" title="Test API connection">Test</button>
+          </div>
+          <div class="api-test-result" data-provider="openai"></div>
+        </div>
+      </div>
+
+      <!-- Anthropic API Key -->
+      <div class="api-key-section" id="anthropic-key-section" style="display: none;">
+        <div class="field">
+          <label>Anthropic API Key <span>Get from <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color: var(--accent);">Anthropic Console</a></span></label>
+          <div class="key-row">
+            <input type="password" id="anthropicApiKey" placeholder="sk-ant-..." />
+            <button class="btn-reveal" data-target="anthropicApiKey" title="Show/hide key">👁</button>
+            <button class="btn-test" data-provider="anthropic" title="Test API connection">Test</button>
+          </div>
+          <div class="api-test-result" data-provider="anthropic"></div>
+        </div>
+      </div>
+
+      <!-- xAI API Key -->
+      <div class="api-key-section" id="xai-key-section" style="display: none;">
+        <div class="field">
+          <label>xAI API Key <span>Get from <a href="https://console.x.ai/" target="_blank" style="color: var(--accent);">xAI Console</a></span></label>
+          <div class="key-row">
+            <input type="password" id="xaiApiKey" placeholder="xai-..." />
+            <button class="btn-reveal" data-target="xaiApiKey" title="Show/hide key">👁</button>
+            <button class="btn-test" data-provider="xai" title="Test API connection">Test</button>
+          </div>
+          <div class="api-test-result" data-provider="xai"></div>
+        </div>
       </div>
     </div>
+  </div>
 
+  <!-- Row 2: Domain Knowledge -->
+  <div class="row full">
     <div class="section">
       <div class="section-title">Domain Knowledge</div>
       <div class="field">

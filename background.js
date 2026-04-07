@@ -4,19 +4,30 @@
 const GENERATION_STATE_KEY = "bugReporterGenerationState";
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
-async function getApiKey() {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.get("geminiApiKey", (r) => {
-      if (r.geminiApiKey) resolve(r.geminiApiKey);
-      else reject(new Error("NO_API_KEY"));
-    });
-  });
-}
-
 async function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get("bugReporterSettings", (r) => resolve(r.bugReporterSettings || {}));
   });
+}
+
+async function getApiKeyForProvider(provider) {
+  const settings = await getSettings();
+  const keyMap = {
+    gemini: settings.geminiApiKey,
+    openai: settings.openaiApiKey,
+    anthropic: settings.anthropicApiKey,
+    xai: settings.xaiApiKey
+  };
+  const key = keyMap[provider];
+  if (!key) throw new Error(`NO_API_KEY for ${provider}`);
+  return key;
+}
+
+async function getCurrentProviderAndKey() {
+  const settings = await getSettings();
+  const provider = settings.aiProvider || "gemini";
+  const key = await getApiKeyForProvider(provider);
+  return { provider, key, settings };
 }
 
 // ── Generation State Management ───────────────────────────────────────────────
@@ -65,7 +76,6 @@ function getBrowserInfo() {
   let browser = "Unknown";
   let os = "Unknown";
 
-  // Detect browser
   if (ua.includes("Chrome") && !ua.includes("Edg")) {
     const match = ua.match(/Chrome\/(\d+)/);
     browser = `Chrome ${match ? match[1] : ""}`;
@@ -80,7 +90,6 @@ function getBrowserInfo() {
     browser = `Safari ${match ? match[1] : ""}`;
   }
 
-  // Detect OS
   if (ua.includes("Windows NT 10")) os = "Windows 10/11";
   else if (ua.includes("Windows")) os = "Windows";
   else if (ua.includes("Mac OS X")) {
@@ -106,7 +115,6 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasS
     customSections         = [],
   } = settings;
 
-  // Get browser and OS info
   const { browser, os } = getBrowserInfo();
 
   const ctx = {
@@ -118,7 +126,6 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasS
     screenInfo: screenInfo || "Unknown"
   };
 
-  // Only render sections the user actually enabled
   const sectionBlocks = [
     ...enabledSections
       .filter(id => SECTION_TEMPLATES[id])
@@ -155,36 +162,24 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasS
   return { systemPrompt, userPrompt };
 }
 
-// ── Gemini call ───────────────────────────────────────────────────────────────
-async function callGeminiVision({ screenshots, audioNote, pageUrl, pageTitle, screenInfo }) {
-  const [apiKey, settings] = await Promise.all([getApiKey(), getSettings()]);
+// ══════════════════════════════════════════════════════════════════════════════
+// AI Provider API Calls
+// ══════════════════════════════════════════════════════════════════════════════
 
-  const hasScreenshots = screenshots && screenshots.length > 0;
-  const { systemPrompt, userPrompt } = buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasScreenshots });
-
+// ── Gemini API ────────────────────────────────────────────────────────────────
+async function callGemini({ apiKey, systemPrompt, userPrompt, screenshots }) {
   const contentParts = [{ text: systemPrompt }];
 
-  // Only include screenshots if they exist
-  if (hasScreenshots) {
-    const imageParts = screenshots.map(b64 => ({
-      inline_data: { mime_type: "image/png", data: b64.replace(/^data:image\/png;base64,/, "") }
-    }));
-
-    screenshots.forEach((_, i) => {
+  if (screenshots && screenshots.length > 0) {
+    screenshots.forEach((b64, i) => {
       contentParts.push({ text: `--- Screenshot ${i+1} ---` });
-      contentParts.push(imageParts[i]);
+      contentParts.push({
+        inline_data: { mime_type: "image/png", data: b64.replace(/^data:image\/png;base64,/, "") }
+      });
     });
   }
 
   contentParts.push({ text: userPrompt });
-
-  const body = {
-    contents: [{
-      role: "user",
-      parts: contentParts
-    }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 1024 }
-  };
 
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
@@ -192,37 +187,203 @@ async function callGeminiVision({ screenshots, audioNote, pageUrl, pageTitle, sc
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": apiKey  // Secure: API key in header, not URL
+        "x-goog-api-key": apiKey
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: contentParts }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
+      })
     }
   );
 
   if (!response.ok) {
     const err = await response.json();
-    throw new Error(err?.error?.message || `API error ${response.status}`);
+    throw new Error(err?.error?.message || `Gemini API error ${response.status}`);
   }
 
   const data = await response.json();
-  let text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Empty response from Gemini");
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text;
+}
 
-  // Check if screenshots section is enabled and we have screenshots - if so, append embedded images
+// ── OpenAI API ────────────────────────────────────────────────────────────────
+async function callOpenAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
+  const messages = [
+    { role: "system", content: systemPrompt }
+  ];
+
+  // Build user message with images
+  const userContent = [];
+
+  if (screenshots && screenshots.length > 0) {
+    screenshots.forEach((b64, i) => {
+      userContent.push({ type: "text", text: `Screenshot ${i+1}:` });
+      userContent.push({
+        type: "image_url",
+        image_url: { url: b64, detail: "high" }
+      });
+    });
+  }
+
+  userContent.push({ type: "text", text: userPrompt });
+
+  messages.push({ role: "user", content: userContent });
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      messages: messages,
+      max_tokens: 2048,
+      temperature: 0.2
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err?.error?.message || `OpenAI API error ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data?.choices?.[0]?.message?.content;
+}
+
+// ── Anthropic API ─────────────────────────────────────────────────────────────
+async function callAnthropic({ apiKey, systemPrompt, userPrompt, screenshots }) {
+  const content = [];
+
+  if (screenshots && screenshots.length > 0) {
+    screenshots.forEach((b64, i) => {
+      content.push({ type: "text", text: `Screenshot ${i+1}:` });
+      content.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: b64.replace(/^data:image\/png;base64,/, "")
+        }
+      });
+    });
+  }
+
+  content.push({ type: "text", text: userPrompt });
+
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: [{ role: "user", content: content }]
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err?.error?.message || `Anthropic API error ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data?.content?.[0]?.text;
+}
+
+// ── xAI Grok API ──────────────────────────────────────────────────────────────
+async function callXAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
+  const messages = [
+    { role: "system", content: systemPrompt }
+  ];
+
+  // Build user message with images (xAI uses OpenAI-compatible format)
+  const userContent = [];
+
+  if (screenshots && screenshots.length > 0) {
+    screenshots.forEach((b64, i) => {
+      userContent.push({ type: "text", text: `Screenshot ${i+1}:` });
+      userContent.push({
+        type: "image_url",
+        image_url: { url: b64, detail: "high" }
+      });
+    });
+  }
+
+  userContent.push({ type: "text", text: userPrompt });
+
+  messages.push({ role: "user", content: userContent });
+
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: "grok-2-vision-1212",
+      messages: messages,
+      max_tokens: 2048,
+      temperature: 0.2
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err?.error?.message || `xAI API error ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data?.choices?.[0]?.message?.content;
+}
+
+// ── Universal AI Call ─────────────────────────────────────────────────────────
+async function callAI({ provider, apiKey, systemPrompt, userPrompt, screenshots }) {
+  const providers = {
+    gemini: callGemini,
+    openai: callOpenAI,
+    anthropic: callAnthropic,
+    xai: callXAI
+  };
+
+  const callFn = providers[provider];
+  if (!callFn) throw new Error(`Unknown AI provider: ${provider}`);
+
+  return await callFn({ apiKey, systemPrompt, userPrompt, screenshots });
+}
+
+// ── Generate Ticket ───────────────────────────────────────────────────────────
+async function generateTicket({ screenshots, audioNote, pageUrl, pageTitle, screenInfo }) {
+  const { provider, key, settings } = await getCurrentProviderAndKey();
+
+  const hasScreenshots = screenshots && screenshots.length > 0;
+  const { systemPrompt, userPrompt } = buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasScreenshots });
+
+  let text = await callAI({
+    provider,
+    apiKey: key,
+    systemPrompt,
+    userPrompt,
+    screenshots: hasScreenshots ? screenshots : []
+  });
+
+  if (!text) throw new Error("Empty response from AI");
+
+  // Check if screenshots section is enabled and we have screenshots
   const enabledSections = settings.enabledSections || [];
   if (enabledSections.includes("screenshots") && hasScreenshots) {
-    // Build HTML img tags for rich text pasting
     const screenshotSection = screenshots.map((dataUrl, i) =>
       `<img src="${dataUrl}" alt="Screenshot ${i + 1}" width="600" />`
     ).join("\n");
 
-    // Try to replace existing Screenshots section placeholder
     if (/## Screenshots/i.test(text)) {
-      text = text.replace(
-        /## Screenshots\n\[.*?\]/i,
-        `## Screenshots\n${screenshotSection}`
-      );
+      text = text.replace(/## Screenshots\n\[.*?\]/i, `## Screenshots\n${screenshotSection}`);
     } else {
-      // If no Screenshots section exists, append it at the end
       text = text.trim() + `\n\n## Screenshots\n${screenshotSection}`;
     }
   }
@@ -240,22 +401,140 @@ async function captureScreenshot() {
   });
 }
 
+// ── Test API Key ──────────────────────────────────────────────────────────────
+async function testApiKey(provider, apiKey) {
+  const testPrompt = "Hello";
+
+  switch (provider) {
+    case "gemini":
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: testPrompt }] }],
+            generationConfig: { maxOutputTokens: 10 }
+          })
+        }
+      );
+      if (!geminiRes.ok) {
+        const err = await geminiRes.json();
+        throw new Error(err?.error?.message || `API error ${geminiRes.status}`);
+      }
+      return true;
+
+    case "openai":
+      const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [{ role: "user", content: testPrompt }],
+          max_tokens: 10
+        })
+      });
+      if (!openaiRes.ok) {
+        const err = await openaiRes.json();
+        throw new Error(err?.error?.message || `API error ${openaiRes.status}`);
+      }
+      return true;
+
+    case "anthropic":
+      const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 10,
+          messages: [{ role: "user", content: testPrompt }]
+        })
+      });
+      if (!anthropicRes.ok) {
+        const err = await anthropicRes.json();
+        throw new Error(err?.error?.message || `API error ${anthropicRes.status}`);
+      }
+      return true;
+
+    case "xai":
+      const xaiRes = await fetch("https://api.x.ai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: "grok-2-vision-1212",
+          messages: [{ role: "user", content: testPrompt }],
+          max_tokens: 10
+        })
+      });
+      if (!xaiRes.ok) {
+        const err = await xaiRes.json();
+        throw new Error(err?.error?.message || `API error ${xaiRes.status}`);
+      }
+      return true;
+
+    default:
+      throw new Error(`Unknown provider: ${provider}`);
+  }
+}
+
+// ── Improve Ticket via Chat ───────────────────────────────────────────────────
+async function improveTicket({ currentTicket, feedback, chatHistory, screenshots }) {
+  const { provider, key } = await getCurrentProviderAndKey();
+
+  const historyContext = chatHistory
+    .map(msg => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
+    .join("\n");
+
+  const systemPrompt = `You are a QA engineer helping to improve a bug report ticket based on user feedback.
+You will receive the current ticket and user's feedback. Make the requested changes while keeping the same format and structure.
+Be concise. Only change what the user asks for. Return ONLY the improved ticket text, no explanations.`;
+
+  const userPrompt = `CURRENT TICKET:
+${currentTicket}
+
+${historyContext ? `PREVIOUS FEEDBACK:\n${historyContext}\n` : ""}
+NEW FEEDBACK:
+${feedback}
+
+Please improve the ticket based on this feedback. Return only the updated ticket.`;
+
+  const text = await callAI({
+    provider,
+    apiKey: key,
+    systemPrompt,
+    userPrompt,
+    screenshots: screenshots || []
+  });
+
+  if (!text) throw new Error("Empty response from AI");
+  return text;
+}
+
 // ── Message handler ───────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
-  if (msg.type === "SAVE_API_KEY") {
-    chrome.storage.local.set({ geminiApiKey: msg.key }, () => sendResponse({ ok: true }));
-    return true;
-  }
-
   if (msg.type === "CHECK_API_KEY") {
-    chrome.storage.local.get("geminiApiKey", (r) => sendResponse({ ok: !!r.geminiApiKey }));
+    getSettings().then(settings => {
+      const provider = settings.aiProvider || "gemini";
+      const keyMap = {
+        gemini: settings.geminiApiKey,
+        openai: settings.openaiApiKey,
+        anthropic: settings.anthropicApiKey,
+        xai: settings.xaiApiKey
+      };
+      sendResponse({ ok: !!keyMap[provider], provider });
+    });
     return true;
   }
 
   if (msg.type === "TEST_API_KEY") {
-    // Test the API key by making a simple request
-    testApiKey(msg.key)
+    const provider = msg.provider || "gemini";
+    testApiKey(provider, msg.key)
       .then(() => sendResponse({ ok: true }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
@@ -264,7 +543,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "CAPTURE_SCREENSHOT") {
     captureScreenshot()
       .then(dataUrl => sendResponse({ ok: true, dataUrl }))
-      .catch(err    => sendResponse({ ok: false, error: err.message }));
+      .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
 
@@ -272,17 +551,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const { screenshots, audioNote, pageUrl, pageTitle, screenInfo } = msg.payload;
     const generationId = Date.now().toString();
 
-    // Store generation state immediately (before async work)
     setGenerationState({
       isGenerating: true,
       generationId,
       startTime: Date.now(),
       payload: msg.payload
     }).then(() => {
-      // Run generation (this continues even if popup closes)
-      callGeminiVision({ screenshots, audioNote, pageUrl, pageTitle, screenInfo })
+      generateTicket({ screenshots, audioNote, pageUrl, pageTitle, screenInfo })
         .then(async (ticket) => {
-          // Store result
           await setGenerationState({
             isGenerating: false,
             generationId,
@@ -290,13 +566,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             ticket,
             error: null
           });
-          // Try to notify popup if it's open
           try {
             chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, ticket });
-          } catch (e) { /* popup closed, that's fine */ }
+          } catch (e) { /* popup closed */ }
         })
         .catch(async (err) => {
-          // Store error
           await setGenerationState({
             isGenerating: false,
             generationId,
@@ -304,14 +578,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             ticket: null,
             error: err.message
           });
-          // Try to notify popup
           try {
             chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, error: err.message });
           } catch (e) { /* popup closed */ }
         });
     });
 
-    // Respond immediately with generation ID
     sendResponse({ ok: true, generationId, generating: true });
     return true;
   }
@@ -337,91 +609,3 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
 });
-
-// ── Test API key ─────────────────────────────────────────────────────────────
-async function testApiKey(apiKey) {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: "Hello" }] }],
-        generationConfig: { maxOutputTokens: 10 }
-      })
-    }
-  );
-
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err?.error?.message || `API error ${response.status}`);
-  }
-
-  return true;
-}
-
-// ── Improve Ticket via Chat ───────────────────────────────────────────────────
-async function improveTicket({ currentTicket, feedback, chatHistory, screenshots }) {
-  const apiKey = await getApiKey();
-
-  // Build conversation context from chat history
-  const historyContext = chatHistory
-    .map(msg => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
-    .join("\n");
-
-  const systemPrompt = `You are a QA engineer helping to improve a bug report ticket based on user feedback.
-You will receive the current ticket and user's feedback. Make the requested changes while keeping the same format and structure.
-Be concise. Only change what the user asks for. Return ONLY the improved ticket text, no explanations.`;
-
-  const userPrompt = `CURRENT TICKET:
-${currentTicket}
-
-${historyContext ? `PREVIOUS FEEDBACK:\n${historyContext}\n` : ""}
-NEW FEEDBACK:
-${feedback}
-
-Please improve the ticket based on this feedback. Return only the updated ticket.`;
-
-  // Include screenshots for context if available
-  const imageParts = screenshots.map(b64 => ({
-    inline_data: { mime_type: "image/png", data: b64.replace(/^data:image\/png;base64,/, "") }
-  }));
-
-  const contentParts = [{ text: systemPrompt }];
-  if (screenshots.length > 0) {
-    contentParts.push({ text: "Context screenshots:" });
-    imageParts.forEach(img => contentParts.push(img));
-  }
-  contentParts.push({ text: userPrompt });
-
-  const body = {
-    contents: [{ role: "user", parts: contentParts }],
-    generationConfig: { temperature: 0.3, maxOutputTokens: 1024 }
-  };
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      body: JSON.stringify(body)
-    }
-  );
-
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err?.error?.message || `API error ${response.status}`);
-  }
-
-  const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Empty response from Gemini");
-
-  return text;
-}
