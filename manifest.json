@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BugReporter — Ticket Generator",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Capture screenshots, video + voice notes, then generate copy-paste ready bug reports via Gemini AI.",
   "permissions": [
     "activeTab",
