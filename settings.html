@@ -286,6 +286,22 @@
     .btn-save:hover { background: #d4e83c; }
     .btn-save:active { transform: scale(0.97); }
 
+    .btn-export, .btn-import {
+      padding: 7px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-export:hover, .btn-import:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
     /* ── Responsive ── */
     @media (max-width: 700px) {
       .row {
@@ -386,15 +402,19 @@
   <div class="row full">
     <div class="section">
       <div class="section-title">Popup UI Fields</div>
-      <div class="section-desc">Choose which input fields to show in the extension popup.</div>
-      <div class="sections-grid small">
+      <div class="section-desc">Choose which input fields and features to show in the extension popup.</div>
+      <div class="sections-grid" style="grid-template-columns: repeat(3, 1fr);">
         <div class="section-check checked" data-field="component">
           <div class="check-box">✓</div>
-          <span class="check-label">Component/Area Field</span>
+          <span class="check-label">Component/Area</span>
         </div>
         <div class="section-check checked" data-field="severity">
           <div class="check-box">✓</div>
-          <span class="check-label">Severity Field</span>
+          <span class="check-label">Severity</span>
+        </div>
+        <div class="section-check" data-field="videoRecording">
+          <div class="check-box"></div>
+          <span class="check-label">Video Recording</span>
         </div>
       </div>
     </div>
@@ -404,6 +424,11 @@
 
 <!-- Save bar -->
 <div class="save-bar">
+  <div style="display: flex; gap: 8px; align-items: center;">
+    <button class="btn-export" id="btn-export" title="Export settings">⬇ Export</button>
+    <button class="btn-import" id="btn-import" title="Import settings">⬆ Import</button>
+    <input type="file" id="import-file" accept=".json" style="display: none;" />
+  </div>
   <span class="save-status" id="save-status">Unsaved changes</span>
   <button class="btn-save" id="btn-save">Save Settings</button>
 </div>

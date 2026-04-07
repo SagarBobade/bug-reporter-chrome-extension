@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "BugReporter — Ticket Generator",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Capture screenshots, video + voice notes, then generate copy-paste ready bug reports via Gemini AI.",
   "permissions": [
     "activeTab",
     "storage",
     "tabs",
     "tabCapture",
-    "offscreen"
+    "offscreen",
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -56,5 +57,11 @@
       },
       "description": "Toggle microphone recording"
     }
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["recording-controls.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

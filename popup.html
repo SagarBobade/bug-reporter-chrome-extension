@@ -222,6 +222,23 @@
     }
     .screenshot-thumb:hover .thumb-del { opacity: 1; }
 
+    .screenshot-thumb .thumb-edit {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      background: rgba(0,0,0,0.7);
+      color: var(--accent);
+      font-size: 9px;
+      padding: 1px 3px;
+      border-radius: 3px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      cursor: pointer;
+      border: none;
+      line-height: 1.4;
+    }
+    .screenshot-thumb:hover .thumb-edit { opacity: 1; }
+
     .screenshot-empty {
       aspect-ratio: 16/9;
       border-radius: var(--radius);
@@ -378,6 +395,11 @@
       align-items: flex-start;
     }
 
+    .note-input-wrap {
+      flex: 1;
+      position: relative;
+    }
+
     .btn-mic {
       width: 36px;
       height: 36px;
@@ -406,9 +428,10 @@
 
     .note-input {
       flex: 1;
+      width: 100%;
       min-height: 36px;
       max-height: 80px;
-      padding: 8px 10px;
+      padding: 8px 28px 8px 10px;
       background: var(--surface2);
       border: 1px solid var(--border);
       border-radius: var(--radius);
@@ -422,6 +445,31 @@
     }
     .note-input:focus { border-color: var(--accent); }
     .note-input::placeholder { color: var(--muted); }
+
+    .btn-clear-input {
+      position: absolute;
+      right: 6px;
+      top: 6px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: none;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .btn-clear-input:hover {
+      background: var(--danger);
+      color: #fff;
+    }
+    .note-input-wrap.has-text .btn-clear-input {
+      display: flex;
+    }
 
     /* ── Context fields ──────────────────────────────────── */
     .context-row {
@@ -1077,8 +1125,8 @@
       <span class="shortcut">crop/mark</span>
     </button>
 
-    <!-- Video Recording Section -->
-    <!-- <div id="video-section" class="video-section">
+    <!-- Video Recording Section (visibility controlled by settings) -->
+    <div id="video-section" class="video-section" style="display: none;">
       <button class="btn-capture btn-record" id="btn-record">
         <span>🎬</span>
         Record Video
@@ -1086,22 +1134,28 @@
       </button>
       <div id="video-preview" class="video-preview" style="display: none;">
         <div class="video-frames-info">
-          <span>🎬 Video frames added</span>
-          <button class="thumb-del" id="btn-delete-video" title="Remove video frames">✕</button>
+          <span id="video-info-text">🎬 Video recorded</span>
+          <div style="display: flex; gap: 6px;">
+            <button class="thumb-del" id="btn-download-video" title="Download video" style="background: var(--accent); color: #000;">⬇</button>
+            <button class="thumb-del" id="btn-delete-video" title="Remove video">✕</button>
+          </div>
         </div>
       </div>
-    </div> -->
+    </div>
 
     <div class="section-label">Notes / Context</div>
 
     <div class="voice-row">
       <button class="btn-mic" id="btn-mic" title="Record voice note">🎙️</button>
-      <textarea
-        class="note-input"
-        id="note-input"
-        placeholder="Describe what you were doing, what broke, what you expected… (or record voice)"
-        rows="2"
-      ></textarea>
+      <div class="note-input-wrap" id="note-input-wrap">
+        <textarea
+          class="note-input"
+          id="note-input"
+          placeholder="Describe what you were doing, what broke, what you expected… (or record voice)"
+          rows="2"
+        ></textarea>
+        <button class="btn-clear-input" id="btn-clear-note" title="Clear text">✕</button>
+      </div>
     </div>
 
     <div class="context-row">
@@ -1176,8 +1230,16 @@
 
     <!-- Screenshot previews for easy copying -->
     <div id="result-screenshots" style="display:none; margin-top: 10px;">
-      <div class="section-label" style="margin-bottom: 6px;">Screenshots (right-click to copy)</div>
+      <div class="section-label" style="margin-bottom: 6px;">Screenshots (click to copy)</div>
       <div id="result-screenshots-grid" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+    </div>
+
+    <!-- Video download in result panel -->
+    <div id="result-video" style="display:none; margin-top: 10px;">
+      <div class="section-label" style="margin-bottom: 6px;">Video Recording</div>
+      <button class="btn-sm" id="btn-result-download-video" style="width: 100%;">
+        <span>⬇</span> Download Video (attach to ticket)
+      </button>
     </div>
 
     <!-- Chat with AI Section -->

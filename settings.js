@@ -74,6 +74,10 @@ async function init() {
   const enabledFields = s.enabledFields || ["component", "severity"]; // Default both enabled
   renderFieldGrid(enabledFields);
 
+  // Video recording setting (explicitly stored as videoRecordingEnabled for clarity)
+  const videoRecordingEnabled = s.videoRecordingEnabled || false;  // Default disabled
+  renderVideoSettings(videoRecordingEnabled);
+
   // Mark clean
   setDirty(false);
 
@@ -141,7 +145,33 @@ function renderFieldGrid(enabledFields) {
 function getEnabledFields() {
   return Array.from(document.querySelectorAll('.section-check.checked[data-field]'))
     .map(el => el.dataset.field)
-    .filter(Boolean);
+    .filter(f => f !== "videoRecording"); // Exclude video recording from field list
+}
+
+// ── Video Recording Settings ─────────────────────────────────────────────────
+function renderVideoSettings(enabled) {
+  const videoCheck = document.querySelector('.section-check[data-field="videoRecording"]');
+  if (!videoCheck) return;
+
+  videoCheck.className = "section-check" + (enabled ? " checked" : "");
+  const box = videoCheck.querySelector(".check-box");
+  box.textContent = enabled ? "✓" : "";
+
+  // Add click handler if not already added
+  if (!videoCheck._hasHandler) {
+    videoCheck.addEventListener("click", () => {
+      videoCheck.classList.toggle("checked");
+      const box = videoCheck.querySelector(".check-box");
+      box.textContent = videoCheck.classList.contains("checked") ? "✓" : "";
+      setDirty(true);
+    });
+    videoCheck._hasHandler = true;
+  }
+}
+
+function isVideoRecordingEnabled() {
+  const videoCheck = document.querySelector('.section-check[data-field="videoRecording"]');
+  return videoCheck ? videoCheck.classList.contains("checked") : false;
 }
 
 // ── Custom sections ───────────────────────────────────────────────────────────
@@ -236,6 +266,7 @@ $("btn-save").addEventListener("click", async () => {
     enabledSections:      getEnabledSections(),
     enabledFields:        getEnabledFields(),
     customSections,
+    videoRecordingEnabled: isVideoRecordingEnabled(),
   };
 
   // Also save API key separately so background.js can find it
@@ -266,6 +297,114 @@ function setDirty(dirty) {
     status.textContent = "All changes saved";
     status.classList.add("saved");
   }
+}
+
+// ── Export Settings ──────────────────────────────────────────────────────────
+$("btn-export").addEventListener("click", () => {
+  const settings = {
+    domainContext:        $("domainContext").value.trim(),
+    techStack:            $("techStack").value.trim(),
+    summaryFormat:        $("summaryFormat").value.trim(),
+    summaryGuidelines:    $("summaryGuidelines").value.trim(),
+    descriptionGuidelines: $("descriptionGuidelines").value.trim(),
+    extraInstructions:    $("extraInstructions").value.trim(),
+    enabledSections:      getEnabledSections(),
+    enabledFields:        getEnabledFields(),
+    customSections,
+    videoRecordingEnabled: isVideoRecordingEnabled(),
+    exportedAt: new Date().toISOString(),
+    version: "1.0"
+  };
+
+  // Note: API key is NOT exported for security reasons
+
+  const blob = new Blob([JSON.stringify(settings, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `bugreporter-settings-${Date.now()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  showStatus("Settings exported!", "success");
+});
+
+// ── Import Settings ──────────────────────────────────────────────────────────
+$("btn-import").addEventListener("click", () => {
+  $("import-file").click();
+});
+
+$("import-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const settings = JSON.parse(text);
+
+    // Validate it's a valid settings file
+    if (!settings.version) {
+      throw new Error("Invalid settings file format");
+    }
+
+    // Apply imported settings to form
+    if (settings.domainContext) $("domainContext").value = settings.domainContext;
+    if (settings.techStack) $("techStack").value = settings.techStack;
+    if (settings.summaryFormat) $("summaryFormat").value = settings.summaryFormat;
+    if (settings.summaryGuidelines) $("summaryGuidelines").value = settings.summaryGuidelines;
+    if (settings.descriptionGuidelines) $("descriptionGuidelines").value = settings.descriptionGuidelines;
+    if (settings.extraInstructions) $("extraInstructions").value = settings.extraInstructions;
+
+    // Apply sections
+    if (settings.enabledSections) {
+      renderSectionsGrid(settings.enabledSections);
+    }
+
+    // Apply fields
+    if (settings.enabledFields) {
+      renderFieldGrid(settings.enabledFields);
+    }
+
+    // Apply custom sections
+    if (settings.customSections) {
+      customSections = settings.customSections;
+      renderCustomSections();
+    }
+
+    // Apply video recording setting
+    if (typeof settings.videoRecordingEnabled === "boolean") {
+      renderVideoSettings(settings.videoRecordingEnabled);
+    }
+
+    setDirty(true);
+    showStatus("Settings imported! Click Save to apply.", "success");
+
+  } catch (err) {
+    showStatus("Failed to import: " + err.message, "error");
+  }
+
+  // Reset file input
+  e.target.value = "";
+});
+
+function showStatus(message, type = "info") {
+  const status = $("save-status");
+  status.textContent = message;
+  if (type === "success") {
+    status.style.color = "var(--success)";
+  } else if (type === "error") {
+    status.style.color = "var(--danger)";
+  }
+  setTimeout(() => {
+    status.style.color = "";
+    if (!isDirty) {
+      status.textContent = "All changes saved";
+    } else {
+      status.textContent = "Unsaved changes";
+    }
+  }, 3000);
 }
 
 init();

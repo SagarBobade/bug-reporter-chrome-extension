@@ -10,12 +10,15 @@ let timerInterval = null;
 let stream = null;
 let recognition = null;
 let transcript = "";
+let targetTabId = null;
+let isPaused = false;
 
 // DOM elements
 const preview = document.getElementById("preview");
 const timer = document.getElementById("timer");
 const btnStop = document.getElementById("btn-stop");
 const btnSave = document.getElementById("btn-save");
+const btnDownload = document.getElementById("btn-download");
 const btnDiscard = document.getElementById("btn-discard");
 const actionsRecording = document.getElementById("actions-recording");
 const actionsDone = document.getElementById("actions-done");
@@ -26,6 +29,12 @@ const recordingDot = document.getElementById("recording-dot");
 
 // Initialize
 async function init() {
+  // Get target tab ID from storage
+  const data = await new Promise(resolve => {
+    chrome.storage.local.get(VIDEO_RECORDING_KEY, result => resolve(result[VIDEO_RECORDING_KEY] || {}));
+  });
+  targetTabId = data.targetTabId;
+
   try {
     // Request screen capture with audio
     stream = await navigator.mediaDevices.getDisplayMedia({
@@ -85,6 +94,7 @@ async function init() {
       if (recognition) {
         recognition.stop();
       }
+      removeFloatingControls();
       showCompletedState();
     };
 
@@ -95,17 +105,24 @@ async function init() {
     chrome.storage.local.set({
       [VIDEO_RECORDING_KEY]: {
         isRecording: true,
-        startTime: recordingStartTime
+        startTime: recordingStartTime,
+        targetTabId: targetTabId
       }
     });
 
     // Start timer
     timerInterval = setInterval(updateTimer, 1000);
 
+    // Inject floating controls into target tab
+    injectFloatingControls();
+
     // Handle stream ending (user clicks "Stop sharing" in browser UI)
     stream.getVideoTracks()[0].onended = () => {
       stopRecording();
     };
+
+    // Listen for control messages from floating chip
+    chrome.runtime.onMessage.addListener(handleControlMessage);
 
   } catch (e) {
     if (e.name === "NotAllowedError") {
@@ -116,6 +133,82 @@ async function init() {
       window.close();
     }
   }
+}
+
+// Inject floating controls into target tab
+async function injectFloatingControls() {
+  if (!targetTabId) return;
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: targetTabId },
+      files: ["recording-controls.js"]
+    });
+  } catch (e) {
+    console.warn("Could not inject recording controls:", e);
+  }
+}
+
+// Remove floating controls from target tab
+async function removeFloatingControls() {
+  if (!targetTabId) return;
+
+  try {
+    await chrome.tabs.sendMessage(targetTabId, { type: "REMOVE_RECORDING_CONTROLS" });
+  } catch (e) {
+    // Tab might be closed
+  }
+}
+
+// Handle control messages from floating chip
+function handleControlMessage(msg, sender, sendResponse) {
+  if (msg.type !== "RECORDING_CONTROL") return;
+
+  switch (msg.action) {
+    case "pause":
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.pause();
+        isPaused = true;
+        recordingDot.style.animation = "none";
+        recordingDot.style.background = "#fbbf24";
+        subtitle.textContent = "Recording paused";
+      }
+      break;
+
+    case "resume":
+      if (mediaRecorder && mediaRecorder.state === "paused") {
+        mediaRecorder.resume();
+        isPaused = false;
+        recordingDot.style.animation = "";
+        recordingDot.style.background = "";
+        subtitle.textContent = "Recording in progress. Speak to describe the bug!";
+      }
+      break;
+
+    case "stop":
+      stopRecording();
+      break;
+
+    case "restart":
+      restartRecording();
+      break;
+  }
+}
+
+// Restart recording
+function restartRecording() {
+  recordedChunks = [];
+  transcript = "";
+  recordingStartTime = Date.now();
+  isPaused = false;
+
+  if (mediaRecorder && mediaRecorder.state === "paused") {
+    mediaRecorder.resume();
+  }
+
+  recordingDot.style.animation = "";
+  recordingDot.style.background = "";
+  subtitle.textContent = "Recording restarted. Speak to describe the bug!";
 }
 
 // Speech recognition for voice transcription
@@ -146,7 +239,7 @@ function startSpeechRecognition() {
     transcript = (finalTranscript + interim).trim();
 
     // Update subtitle to show transcription is working
-    if (transcript) {
+    if (transcript && !isPaused) {
       subtitle.textContent = "Recording... Voice detected!";
     }
   };
@@ -174,6 +267,7 @@ function startSpeechRecognition() {
 }
 
 function updateTimer() {
+  if (isPaused) return;
   const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
   const minutes = Math.floor(elapsed / 60).toString().padStart(2, "0");
   const seconds = (elapsed % 60).toString().padStart(2, "0");
@@ -198,12 +292,12 @@ function showCompletedState() {
   actionsRecording.classList.add("hidden");
   actionsDone.classList.remove("hidden");
   recordingStatus.classList.add("completed");
-  subtitle.textContent = "Recording complete! Save to add to your bug report.";
+  subtitle.textContent = "Recording complete! Download to attach to your ticket.";
 
   if (transcript) {
-    info.innerHTML = `<strong>Voice transcript:</strong> "${transcript.substring(0, 100)}${transcript.length > 100 ? '...' : ''}"<br><br>Key frames will be extracted automatically for AI analysis.`;
+    info.innerHTML = `<strong>Voice transcript:</strong> "${transcript.substring(0, 100)}${transcript.length > 100 ? '...' : ''}"<br><br>Transcript will be added to notes. Download video for attachment.`;
   } else {
-    info.textContent = "Key frames will be extracted automatically for AI analysis.";
+    info.textContent = "Download the video to attach it to your ticket.";
   }
 
   // Create blob and show in preview
@@ -220,25 +314,43 @@ function showCompletedState() {
       completed: true
     }
   });
+
+  // Focus this tab (recorder tab) to show the recorded video
+  focusRecorderTab();
+}
+
+// Focus the recorder tab
+async function focusRecorderTab() {
+  try {
+    const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // Get this tab (recorder.html)
+    const tabs = await chrome.tabs.query({ url: chrome.runtime.getURL("recorder.html") });
+    if (tabs.length > 0) {
+      await chrome.tabs.update(tabs[0].id, { active: true });
+      await chrome.windows.update(tabs[0].windowId, { focused: true });
+    }
+  } catch (e) {
+    console.warn("Could not focus recorder tab:", e);
+  }
 }
 
 // Save recording
 btnSave.addEventListener("click", async () => {
   btnSave.disabled = true;
-  btnSave.innerHTML = "<span>⏳</span> Processing...";
+  btnSave.innerHTML = "<span>⏳</span> Saving...";
 
   const blob = new Blob(recordedChunks, { type: 'video/webm' });
 
-  // Extract key frames
-  const frames = await extractKeyFrames(blob);
+  // Convert video blob to base64 for storage (no frame extraction - video is for download only)
+  const videoBlobBase64 = await blobToBase64(blob);
 
-  // Store frames and transcript in storage for popup to pick up
+  // Store transcript and video blob in storage for popup to pick up
   chrome.storage.local.set({
     [VIDEO_RECORDING_KEY]: {
       isRecording: false,
       completed: true,
-      frames: frames,
       transcript: transcript || "",
+      videoBlobBase64: videoBlobBase64,
       savedAt: Date.now()
     }
   }, () => {
@@ -247,77 +359,41 @@ btnSave.addEventListener("click", async () => {
   });
 });
 
+// Convert blob to base64
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      // Remove data URL prefix to get raw base64
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 // Discard recording
 btnDiscard.addEventListener("click", () => {
+  removeFloatingControls();
   chrome.storage.local.remove(VIDEO_RECORDING_KEY, () => {
     window.close();
   });
 });
 
-// Extract key frames from video
-async function extractKeyFrames(blob) {
-  const video = document.createElement("video");
-  video.src = URL.createObjectURL(blob);
-  video.muted = true;
-
-  await new Promise((resolve, reject) => {
-    video.onloadedmetadata = resolve;
-    video.onerror = reject;
-    // Timeout fallback
-    setTimeout(resolve, 5000);
-  });
-
-  const duration = video.duration;
-
-  // Check for valid duration
-  if (!duration || !isFinite(duration) || duration <= 0) {
-    console.warn("Invalid video duration, capturing single frame");
-    // Try to capture at least one frame at position 0
-    video.currentTime = 0;
-    await new Promise(resolve => {
-      video.onseeked = resolve;
-      setTimeout(resolve, 1000); // Fallback timeout
-    });
-
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    ctx.drawImage(video, 0, 0);
-
-    URL.revokeObjectURL(video.src);
-    return [canvas.toDataURL("image/png")];
-  }
-
-  const frameCount = Math.min(5, Math.max(1, Math.ceil(duration / 2))); // Max 5 frames, at least 1
-  const interval = duration / (frameCount + 1);
-
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  const frames = [];
-
-  for (let i = 1; i <= frameCount; i++) {
-    const time = Math.min(interval * i, duration - 0.1); // Ensure we don't exceed duration
-
-    if (!isFinite(time) || time < 0) continue;
-
-    video.currentTime = time;
-
-    await new Promise(resolve => {
-      video.onseeked = resolve;
-      setTimeout(resolve, 1000); // Fallback timeout
-    });
-
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    ctx.drawImage(video, 0, 0);
-
-    frames.push(canvas.toDataURL("image/png"));
-  }
-
-  URL.revokeObjectURL(video.src);
-  return frames.length > 0 ? frames : [canvas.toDataURL("image/png")]; // Return at least one frame
-}
+// Download recording
+btnDownload.addEventListener("click", () => {
+  const blob = new Blob(recordedChunks, { type: 'video/webm' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `bug-recording-${Date.now()}.webm`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast("Video downloaded!");
+});
 
 function showToast(message) {
   const toast = document.createElement("div");
@@ -331,6 +407,7 @@ btnStop.addEventListener("click", stopRecording);
 
 // Handle page close
 window.addEventListener("beforeunload", () => {
+  removeFloatingControls();
   if (mediaRecorder && mediaRecorder.state === "recording") {
     chrome.storage.local.set({
       [VIDEO_RECORDING_KEY]: {
