@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "BugReporter — Ticket Generator",
   "version": "1.0.6",
-  "description": "Capture, annotate, and record bugs with voice notes, then generate structured, copy-paste-ready tickets using your preferred AI model.",
+  "description": "Capture, annotate, and record bugs with voice notes, then generate copy-paste-ready tickets using AI model.",
   "permissions": [
     "activeTab",
     "storage",
