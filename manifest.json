@@ -1,20 +1,22 @@
 {
   "manifest_version": 3,
   "name": "BugReporter — Ticket Generator",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "description": "Capture, annotate, and record bugs with voice notes, then generate copy-paste-ready tickets using AI model.",
   "permissions": [
     "activeTab",
     "storage",
     "tabs",
     "tabCapture",
+    "desktopCapture",
+    "offscreen",
     "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;"
+    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline';"
   },
   "action": {
     "default_popup": "popup.html",

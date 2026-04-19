@@ -4,21 +4,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BugReporter Settings</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg: #0c0c0f;
-      --surface: #141418;
-      --surface2: #1c1c22;
-      --border: #2a2a33;
-      --accent: #e8ff47;
-      --text: #f0f0f5;
-      --muted: #6b6b7a;
-      --success: #4ade80;
-      --danger: #f87171;
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --surface2: #334155;
+      --border: #334155;
+      --accent: #4f46e5;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --success: #10b981;
+      --danger: #ef4444;
       --radius: 8px;
     }
 
@@ -29,8 +28,8 @@
       min-height: 100vh;
       background: var(--bg);
       color: var(--text);
-      font-family: 'Syne', sans-serif;
-      font-size: 13px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
       line-height: 1.5;
       padding-bottom: 80px;
     }
@@ -49,7 +48,7 @@
     }
     .logo { font-size: 26px; }
     .header-text h1 { font-size: 20px; font-weight: 800; }
-    .header-text p { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.5px; }
+    .header-text p { font-size: 11px; color: var(--muted); font-family: 'SF Mono', Monaco, monospace; text-transform: uppercase; letter-spacing: 0.5px; }
 
     /* ── Content Grid ── */
     .content {
@@ -96,7 +95,7 @@
     .section-desc {
       font-size: 11px;
       color: var(--muted);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'SF Mono', Monaco, monospace;
       line-height: 1.6;
       background: var(--surface2);
       padding: 8px 10px;
@@ -117,7 +116,7 @@
     .field label span {
       font-size: 10px;
       color: var(--muted);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'SF Mono', Monaco, monospace;
       font-weight: 400;
     }
     .field input, .field textarea, .field select {
@@ -126,7 +125,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       color: var(--text);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'SF Mono', Monaco, monospace;
       font-size: 11px;
       outline: none;
       transition: border-color 0.2s;
@@ -175,7 +174,7 @@
       border-color: var(--accent);
       color: #000;
     }
-    .check-label { font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+    .check-label { font-size: 11px; font-family: 'SF Mono', Monaco, monospace; }
 
     /* ── Tag input ── */
     .tag-input-wrap {
@@ -198,7 +197,7 @@
       border: 1px solid rgba(232,255,71,0.3);
       border-radius: 20px;
       font-size: 10px;
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'SF Mono', Monaco, monospace;
       color: var(--accent);
     }
     .tag button {
@@ -210,10 +209,10 @@
     .tag-input {
       flex: 1; min-width: 100px;
       background: none; border: none; outline: none;
-      color: var(--text); font-family: 'JetBrains Mono', monospace;
+      color: var(--text); font-family: 'SF Mono', Monaco, monospace;
       font-size: 11px; padding: 2px 4px;
     }
-    .tag-hint { font-size: 10px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+    .tag-hint { font-size: 10px; color: var(--muted); font-family: 'SF Mono', Monaco, monospace; }
 
     /* ── API key row ── */
     .key-row { display: flex; gap: 6px; }
@@ -231,7 +230,7 @@
     }
     .btn-reveal:hover, .btn-test:hover { border-color: var(--accent); color: var(--accent); }
     .btn-test {
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'SF Mono', Monaco, monospace;
       font-size: 10px;
       padding: 0 12px;
     }
@@ -240,7 +239,7 @@
     .api-test-result {
       margin-top: 6px;
       font-size: 11px;
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'SF Mono', Monaco, monospace;
       display: none;
     }
     .api-test-result.visible { display: block; }
@@ -266,7 +265,7 @@
     }
     .save-status {
       font-size: 11px;
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'SF Mono', Monaco, monospace;
       color: var(--muted);
       transition: color 0.3s;
     }
@@ -277,13 +276,13 @@
       border: none;
       border-radius: var(--radius);
       color: #000;
-      font-family: 'Syne', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       font-size: 12px;
       font-weight: 800;
       cursor: pointer;
       transition: all 0.2s;
     }
-    .btn-save:hover { background: #d4e83c; }
+    .btn-save:hover { background: #4338ca; }
     .btn-save:active { transform: scale(0.97); }
 
     .btn-export, .btn-import {
@@ -292,7 +291,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       color: var(--muted);
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'SF Mono', Monaco, monospace;
       font-size: 10px;
       cursor: pointer;
       transition: all 0.2s;
@@ -476,6 +475,54 @@
     </div>
   </div>
 
+  <!-- Row 5: Video Recording Configuration -->
+  <div class="row full">
+    <div class="section">
+      <div class="section-title">Video Recording Configuration</div>
+      <div class="section-desc">Configure picture-in-picture webcam overlay and recording quality settings.</div>
+      
+      <div class="sections-grid small" style="margin-bottom: 16px;">
+        <div class="section-check" data-webcam="enabled" id="webcam-enabled-check">
+          <div class="check-box"></div>
+          <span class="check-label">Enable Webcam PiP</span>
+        </div>
+      </div>
+
+      <div id="webcam-config" style="display: none;">
+        <div class="row" style="grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <div class="field">
+            <label>Webcam Position <span>where to show webcam</span></label>
+            <select id="webcamPosition">
+              <option value="bottom-right">Bottom Right</option>
+              <option value="bottom-left">Bottom Left</option>
+              <option value="top-right">Top Right</option>
+              <option value="top-left">Top Left</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Webcam Size <span>% of video width</span></label>
+            <select id="webcamSize">
+              <option value="10">10% (Tiny)</option>
+              <option value="15">15% (Small)</option>
+              <option value="20" selected>20% (Medium)</option>
+              <option value="25">25% (Large)</option>
+              <option value="30">30% (Extra Large)</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="field">
+          <label>Recording Quality <span>higher quality = larger file size</span></label>
+          <select id="recordingQuality">
+            <option value="480">480p (Low - Better Performance)</option>
+            <option value="720" selected>720p (Medium - Recommended)</option>
+            <option value="1080">1080p (High - Full HD)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Save bar -->
@@ -489,6 +536,7 @@
   <button class="btn-save" id="btn-save">Save Settings</button>
 </div>
 
+<script src="toast.js"></script>
 <script src="settings.js"></script>
 </body>
 </html>

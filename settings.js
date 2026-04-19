@@ -91,6 +91,17 @@ async function init() {
   const videoRecordingEnabled = s.videoRecordingEnabled || false;
   renderVideoSettings(videoRecordingEnabled);
 
+  // Webcam configuration
+  const webcamEnabled = s.webcamEnabled || false;
+  const webcamPosition = s.webcamPosition || "bottom-right";
+  const webcamSize = s.webcamSize || 20;
+  const recordingQuality = s.recordingQuality || 720;
+  
+  renderWebcamSettings(webcamEnabled);
+  if (webcamPosition) $("webcamPosition").value = webcamPosition;
+  if (webcamSize) $("webcamSize").value = webcamSize.toString();
+  if (recordingQuality) $("recordingQuality").value = recordingQuality.toString();
+
   // Mark clean
   setDirty(false);
 
@@ -235,6 +246,45 @@ function getEnabledFields() {
     .filter(f => f !== "videoRecording");
 }
 
+// ── Webcam Configuration ─────────────────────────────────────────────────────
+function renderWebcamSettings(enabled) {
+  const webcamCheck = $("webcam-enabled-check");
+  const webcamConfig = $("webcam-config");
+  
+  if (!webcamCheck) return;
+
+  webcamCheck.className = "section-check" + (enabled ? " checked" : "");
+  const box = webcamCheck.querySelector(".check-box");
+  box.textContent = enabled ? "✓" : "";
+  
+  // Show/hide config section
+  if (webcamConfig) {
+    webcamConfig.style.display = enabled ? "block" : "none";
+  }
+
+  if (!webcamCheck._hasHandler) {
+    webcamCheck.addEventListener("click", () => {
+      webcamCheck.classList.toggle("checked");
+      const box = webcamCheck.querySelector(".check-box");
+      const isChecked = webcamCheck.classList.contains("checked");
+      box.textContent = isChecked ? "✓" : "";
+      
+      // Toggle webcam config visibility
+      if (webcamConfig) {
+        webcamConfig.style.display = isChecked ? "block" : "none";
+      }
+      
+      setDirty(true);
+    });
+    webcamCheck._hasHandler = true;
+  }
+}
+
+function isWebcamEnabled() {
+  const webcamCheck = $("webcam-enabled-check");
+  return webcamCheck ? webcamCheck.classList.contains("checked") : false;
+}
+
 // ── Video Recording Settings ─────────────────────────────────────────────────
 function renderVideoSettings(enabled) {
   const videoCheck = document.querySelector('.section-check[data-field="videoRecording"]');
@@ -315,6 +365,10 @@ $("btn-save").addEventListener("click", async () => {
     enabledFields:        getEnabledFields(),
     customSections,
     videoRecordingEnabled: isVideoRecordingEnabled(),
+    webcamEnabled:        isWebcamEnabled(),
+    webcamPosition:       $("webcamPosition") ? $("webcamPosition").value : "bottom-right",
+    webcamSize:           $("webcamSize") ? parseInt($("webcamSize").value) : 20,
+    recordingQuality:     $("recordingQuality") ? parseInt($("recordingQuality").value) : 720,
   };
 
   // Save settings
@@ -358,8 +412,12 @@ $("btn-export").addEventListener("click", () => {
     enabledFields:        getEnabledFields(),
     customSections,
     videoRecordingEnabled: isVideoRecordingEnabled(),
+    webcamEnabled:        isWebcamEnabled(),
+    webcamPosition:       $("webcamPosition") ? $("webcamPosition").value : "bottom-right",
+    webcamSize:           $("webcamSize") ? parseInt($("webcamSize").value) : 20,
+    recordingQuality:     $("recordingQuality") ? parseInt($("recordingQuality").value) : 720,
     exportedAt: new Date().toISOString(),
-    version: "1.1"
+    version: "1.2"
   };
 
   // Note: API keys are NOT exported for security reasons
@@ -374,7 +432,7 @@ $("btn-export").addEventListener("click", () => {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 
-  showStatus("Settings exported!", "success");
+  showToast("Settings exported successfully!", "success");
 });
 
 // ── Import Settings ──────────────────────────────────────────────────────────
@@ -423,11 +481,25 @@ $("import-file").addEventListener("change", async (e) => {
       renderVideoSettings(settings.videoRecordingEnabled);
     }
 
+    // Import webcam settings
+    if (typeof settings.webcamEnabled === "boolean") {
+      renderWebcamSettings(settings.webcamEnabled);
+    }
+    if (settings.webcamPosition && $("webcamPosition")) {
+      $("webcamPosition").value = settings.webcamPosition;
+    }
+    if (settings.webcamSize && $("webcamSize")) {
+      $("webcamSize").value = settings.webcamSize.toString();
+    }
+    if (settings.recordingQuality && $("recordingQuality")) {
+      $("recordingQuality").value = settings.recordingQuality.toString();
+    }
+
     setDirty(true);
-    showStatus("Settings imported! Click Save to apply.", "success");
+    showToast("Settings imported! Click Save to apply.", "success");
 
   } catch (err) {
-    showStatus("Failed to import: " + err.message, "error");
+    showToast("Failed to import: " + err.message, "error");
   }
 
   e.target.value = "";

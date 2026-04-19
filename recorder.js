@@ -8,6 +8,9 @@ let recordedChunks = [];
 let recordingStartTime = null;
 let timerInterval = null;
 let stream = null;
+let webcamStream = null;
+let compositeCanvas = null;
+let compositeInterval = null;
 let recognition = null;
 let transcript = "";
 let targetTabId = null;
@@ -29,18 +32,48 @@ const recordingDot = document.getElementById("recording-dot");
 
 // Initialize
 async function init() {
-  // Get target tab ID from storage
-  const data = await new Promise(resolve => {
-    chrome.storage.local.get(VIDEO_RECORDING_KEY, result => resolve(result[VIDEO_RECORDING_KEY] || {}));
-  });
-  targetTabId = data.targetTabId;
+  // Get target tab ID and settings from storage
+  const [videoData, settingsData] = await Promise.all([
+    new Promise(resolve => {
+      chrome.storage.local.get(VIDEO_RECORDING_KEY, result => resolve(result[VIDEO_RECORDING_KEY] || {}));
+    }),
+    new Promise(resolve => {
+      chrome.storage.local.get("bugReporterSettings", result => resolve(result.bugReporterSettings || {}));
+    })
+  ]);
+  
+  targetTabId = videoData.targetTabId;
+  
+  const webcamEnabled = settingsData.webcamEnabled || false;
+  const webcamPosition = settingsData.webcamPosition || "bottom-right";
+  const webcamSize = settingsData.webcamSize || 20;
+  const recordingQuality = settingsData.recordingQuality || 720;
 
   try {
     // Request screen capture with audio
     stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { cursor: "always" },
+      video: { 
+        cursor: "always",
+        width: { ideal: recordingQuality * 16/9 },
+        height: { ideal: recordingQuality }
+      },
       audio: true
     });
+
+    // Request webcam if enabled
+    if (webcamEnabled) {
+      try {
+        webcamStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { 
+            width: { ideal: 320 }, 
+            height: { ideal: 240 } 
+          } 
+        });
+      } catch (e) {
+        console.warn("Webcam not available:", e);
+        showToast("Webcam unavailable, recording without it", "warning");
+      }
+    }
 
     // Also get microphone for voice transcription
     let micStream = null;
@@ -50,11 +83,17 @@ async function init() {
       console.warn("Microphone access denied, continuing without voice transcription");
     }
 
-    // Show preview
-    preview.srcObject = stream;
+    // Create composite stream if webcam is enabled
+    let videoStream = stream;
+    if (webcamEnabled && webcamStream) {
+      videoStream = await createCompositeStream(stream, webcamStream, webcamPosition, webcamSize);
+    } else {
+      // Show regular preview
+      preview.srcObject = stream;
+    }
 
-    // Combine streams if mic is available
-    let combinedStream = stream;
+    // Combine audio streams if mic is available
+    let combinedStream = videoStream;
     if (micStream) {
       const audioContext = new AudioContext();
       const dest = audioContext.createMediaStreamDestination();
@@ -69,9 +108,9 @@ async function init() {
       const micAudio = audioContext.createMediaStreamSource(micStream);
       micAudio.connect(dest);
 
-      // Create combined stream with video from screen and combined audio
+      // Create combined stream with video and combined audio
       combinedStream = new MediaStream([
-        ...stream.getVideoTracks(),
+        ...videoStream.getVideoTracks(),
         ...dest.stream.getAudioTracks()
       ]);
 
@@ -94,6 +133,14 @@ async function init() {
       if (recognition) {
         recognition.stop();
       }
+      if (compositeInterval) {
+        clearInterval(compositeInterval);
+      }
+      if (webcamStream) {
+        webcamStream.getTracks().forEach(track => track.stop());
+      }
+      // Clean up hidden video elements used for compositing
+      document.querySelectorAll("video[style*='display: none']").forEach(v => v.remove());
       removeFloatingControls();
       showCompletedState();
     };
@@ -133,6 +180,114 @@ async function init() {
       window.close();
     }
   }
+}
+
+// Create composite stream with webcam overlay
+async function createCompositeStream(screenStream, webcamStream, position, sizePercent) {
+  // Create canvas for compositing
+  compositeCanvas = document.createElement("canvas");
+  const ctx = compositeCanvas.getContext("2d");
+  
+  // Create video elements and append to DOM (required for rendering)
+  const screenVideo = document.createElement("video");
+  screenVideo.srcObject = screenStream;
+  screenVideo.muted = true;
+  screenVideo.playsInline = true;
+  screenVideo.style.display = "none";
+  document.body.appendChild(screenVideo);
+  
+  const webcamVideo = document.createElement("video");
+  webcamVideo.srcObject = webcamStream;
+  webcamVideo.muted = true;
+  webcamVideo.playsInline = true;
+  webcamVideo.style.display = "none";
+  document.body.appendChild(webcamVideo);
+  
+  // Wait for metadata to load
+  await Promise.all([
+    new Promise(resolve => { screenVideo.onloadedmetadata = resolve; }),
+    new Promise(resolve => { webcamVideo.onloadedmetadata = resolve; })
+  ]);
+  
+  // Explicitly start playing both videos
+  await Promise.all([
+    screenVideo.play(),
+    webcamVideo.play()
+  ]);
+  
+  // Wait for actual video frames to be available
+  await new Promise(resolve => {
+    const checkReady = () => {
+      if (screenVideo.readyState >= 2 && webcamVideo.readyState >= 2) {
+        resolve();
+      } else {
+        requestAnimationFrame(checkReady);
+      }
+    };
+    checkReady();
+  });
+  
+  // Set canvas size to screen video size
+  compositeCanvas.width = screenVideo.videoWidth;
+  compositeCanvas.height = screenVideo.videoHeight;
+  
+  console.log(`Composite canvas: ${compositeCanvas.width}x${compositeCanvas.height}`);
+  console.log(`Webcam video: ${webcamVideo.videoWidth}x${webcamVideo.videoHeight}`);
+  
+  // Calculate webcam dimensions
+  const webcamWidth = Math.floor(compositeCanvas.width * (sizePercent / 100));
+  const webcamHeight = Math.floor(webcamWidth * 3/4);
+  
+  // Calculate position based on settings
+  let webcamX, webcamY;
+  const margin = 20;
+  if (position === "bottom-right") {
+    webcamX = compositeCanvas.width - webcamWidth - margin;
+    webcamY = compositeCanvas.height - webcamHeight - margin;
+  } else if (position === "bottom-left") {
+    webcamX = margin;
+    webcamY = compositeCanvas.height - webcamHeight - margin;
+  } else if (position === "top-right") {
+    webcamX = compositeCanvas.width - webcamWidth - margin;
+    webcamY = margin;
+  } else { // top-left
+    webcamX = margin;
+    webcamY = margin;
+  }
+  
+  // Composite frames at 30fps
+  compositeInterval = setInterval(() => {
+    // Draw screen video
+    ctx.drawImage(screenVideo, 0, 0, compositeCanvas.width, compositeCanvas.height);
+    
+    // Draw webcam with rounded corners and border
+    ctx.save();
+    
+    // Draw webcam border
+    ctx.strokeStyle = "#4f46e5";
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "rgba(79, 70, 229, 0.5)";
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.roundRect(webcamX - 2, webcamY - 2, webcamWidth + 4, webcamHeight + 4, 8);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    
+    // Clip to rounded rect for webcam video
+    ctx.beginPath();
+    ctx.roundRect(webcamX, webcamY, webcamWidth, webcamHeight, 6);
+    ctx.clip();
+    
+    // Draw webcam video
+    ctx.drawImage(webcamVideo, webcamX, webcamY, webcamWidth, webcamHeight);
+    ctx.restore();
+  }, 1000/30);
+  
+  // Show composite in preview
+  preview.srcObject = compositeCanvas.captureStream(30);
+  
+  // Return composite stream
+  return compositeCanvas.captureStream(30);
 }
 
 // Inject floating controls into target tab

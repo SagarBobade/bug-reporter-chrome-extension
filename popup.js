@@ -1,5 +1,54 @@
 // popup.js — BugReporter extension popup controller
 
+// ── Icon Replacement on Load ─────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  // Replace emoji with SVG icons throughout the UI
+  const iconReplacements = {
+    '🪲': icons.alert,          // Bug icon in logo
+    '📸': icons.camera,          // Camera icon
+    '✏️': icons.pencil,          // Pencil/edit icon
+    '🎬': icons.video,           // Video icon
+    '🎙️': icons.mic,             // Microphone icon
+    '✨': icons.sparkles,        // Sparkles/generate icon
+    '⚙️': icons.settings,        // Settings icon
+    '⬇': icons.download,        // Download icon
+    '↺': icons.redo,            // Redo/regenerate icon
+    '⎘': icons.copy,            // Copy icon
+  };
+
+  // Function to recursively replace emoji in text nodes
+  function replaceEmoji(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      let text = node.textContent;
+      let replaced = false;
+      for (const [emoji, svg] of Object.entries(iconReplacements)) {
+        if (text.includes(emoji)) {
+          replaced = true;
+          break;
+        }
+      }
+      if (replaced) {
+        const span = document.createElement('span');
+        span.innerHTML = node.textContent;
+        for (const [emoji, svg] of Object.entries(iconReplacements)) {
+          span.innerHTML = span.innerHTML.replace(emoji, svg);
+        }
+        node.parentNode.replaceChild(span, node);
+      }
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      // Skip script and style tags
+      if (node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE') {
+        Array.from(node.childNodes).forEach(replaceEmoji);
+      }
+    }
+  }
+
+  // Replace emoji after a short delay to ensure DOM is fully loaded
+  setTimeout(() => {
+    replaceEmoji(document.body);
+  }, 10);
+});
+
 // ── State ────────────────────────────────────────────────────────────────────
 const state = {
   screenshots: [],
@@ -14,6 +63,7 @@ const state = {
   chatHistory: [], // Chat history with AI
   videoBlobUrl: null, // Blob URL for video download (video NOT sent to AI)
   videoRecordingEnabled: false, // Setting: whether video recording is enabled
+  isTranscriptUpdate: false, // Flag to distinguish transcript vs user edits
 };
 
 const MAX_SCREENSHOTS = 6;
@@ -315,7 +365,13 @@ async function init() {
     chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
   });
 
-  noteInput.addEventListener("input",  () => { updateSteps(); updateGenerateBtn(); saveSession(); updateNoteInputClear(); });
+  noteInput.addEventListener("input",  () => {
+    updateSteps(); updateGenerateBtn(); saveSession(); updateNoteInputClear();
+    // Sync manual edits back to content script so speech appends to edited text
+    if (state.isListening && !state.isTranscriptUpdate) {
+      syncTranscriptToContentScript();
+    }
+  });
   fieldComp.addEventListener("input",  saveSession);
   fieldSev.addEventListener("change",  saveSession);
 
@@ -381,7 +437,10 @@ function setupSpeechRecognition() {
     }
 
     if (msg.type === "MIC_TRANSCRIPT") {
+      state.isTranscriptUpdate = true;
       noteInput.value = msg.text;
+      updateNoteInputClear();
+      state.isTranscriptUpdate = false;
       updateSteps();
       updateGenerateBtn();
       if (msg.isFinal) {
@@ -1028,6 +1087,18 @@ authBadge.addEventListener("click", () => {
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// Sync user edits back to content script's finalTranscript during recording
+async function syncTranscriptToContentScript() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    chrome.tabs.sendMessage(tab.id, {
+      type: "SYNC_TRANSCRIPT",
+      text: noteInput.value + " "
+    });
+  } catch (e) { /* ignore */ }
+}
+
 function setLoading(on) {
   btnGenerate.disabled = on;
   loadingBar.classList.toggle("visible", on);

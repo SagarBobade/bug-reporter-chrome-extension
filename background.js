@@ -393,12 +393,11 @@ async function generateTicket({ screenshots, audioNote, pageUrl, pageTitle, scre
 
 // ── Screenshot capture ────────────────────────────────────────────────────────
 async function captureScreenshot() {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.captureVisibleTab(null, { format: "png", quality: 90 }, (dataUrl) => {
-      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-      else resolve(dataUrl);
-    });
+  const dataUrl = await chrome.tabs.captureVisibleTab(null, {
+    format: "png",
+    quality: 100,
   });
+  return dataUrl;
 }
 
 // ── Test API Key ──────────────────────────────────────────────────────────────

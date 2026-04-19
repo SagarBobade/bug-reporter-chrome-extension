@@ -20,6 +20,7 @@ const state = {
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const canvasWrapper = document.querySelector(".canvas-wrapper");
 const colorPicker = document.getElementById("color-picker");
 const sizeSlider = document.getElementById("size-slider");
 const sizeValue = document.getElementById("size-value");
@@ -230,13 +231,48 @@ function handleMouseDown(e) {
   }
 
   if (state.currentTool === "text") {
-    const text = prompt("Enter text:");
-    if (text) {
-      ctx.font = `${state.lineWidth * 4}px 'Syne', sans-serif`;
-      ctx.fillStyle = state.color;
-      ctx.fillText(text, coords.x, coords.y);
-      saveHistory();
-    }
+    // Create inline text input overlay
+    const input = document.createElement("input");
+    input.type = "text";
+    input.style.position = "absolute";
+    input.style.left = coords.x + "px";
+    input.style.top = (coords.y - state.lineWidth * 4) + "px";
+    input.style.font = `${state.lineWidth * 4}px 'Syne', sans-serif`;
+    input.style.color = state.color;
+    input.style.background = "rgba(0,0,0,0.8)";
+    input.style.border = "2px solid " + state.color;
+    input.style.borderRadius = "4px";
+    input.style.padding = "4px 8px";
+    input.style.outline = "none";
+    input.style.zIndex = "1000";
+    input.style.minWidth = "200px";
+    
+    canvasWrapper.appendChild(input);
+    input.focus();
+    
+    const commitText = () => {
+      const text = input.value.trim();
+      if (text) {
+        ctx.font = `${state.lineWidth * 4}px 'Syne', sans-serif`;
+        ctx.fillStyle = state.color;
+        ctx.fillText(text, coords.x, coords.y);
+        saveHistory();
+      }
+      input.remove();
+    };
+    
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitText();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        input.remove();
+      }
+    });
+    
+    input.addEventListener("blur", commitText);
+    
     state.isDrawing = false;
   }
 }

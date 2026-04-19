@@ -90,6 +90,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ success: true });
   }
 
+  if (msg.type === "SYNC_TRANSCRIPT") {
+    if (isListening) {
+      finalTranscript = msg.text || "";
+    }
+    sendResponse({ success: true });
+  }
+
   if (msg.type === "CHECK_MIC_STATE") {
     sendResponse({ listening: isListening });
   }
