@@ -42,20 +42,31 @@ async function init() {
   img.onload = () => {
     state.originalImage = img;
 
-    // Set canvas size to image size (max reasonable size)
+    // Set canvas size to full image resolution for HD quality
+    // Display scaled down with CSS to fit viewport
     const maxWidth = window.innerWidth - 80;
     const maxHeight = window.innerHeight - 200;
-    let scale = 1;
+    let displayScale = 1;
 
-    if (img.width > maxWidth) scale = Math.min(scale, maxWidth / img.width);
-    if (img.height > maxHeight) scale = Math.min(scale, maxHeight / img.height);
+    if (img.width > maxWidth) displayScale = Math.min(displayScale, maxWidth / img.width);
+    if (img.height > maxHeight) displayScale = Math.min(displayScale, maxHeight / img.height);
 
-    canvas.width = img.width * scale;
-    canvas.height = img.height * scale;
-    canvas.style.width = canvas.width + "px";
-    canvas.style.height = canvas.height + "px";
+    // Canvas internal resolution = full image size (HD quality)
+    canvas.width = img.width;
+    canvas.height = img.height;
 
-    // Draw original image
+    // CSS display size = scaled to fit viewport
+    state.displayScale = displayScale;
+    const displayWidth = Math.round(img.width * displayScale);
+    const displayHeight = Math.round(img.height * displayScale);
+    canvas.style.width = displayWidth + "px";
+    canvas.style.height = displayHeight + "px";
+
+    // Lock wrapper size to prevent layout shifts from canvas intrinsic size
+    canvasWrapper.style.width = displayWidth + "px";
+    canvasWrapper.style.height = displayHeight + "px";
+
+    // Draw original image at full resolution
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
     // Save initial state
@@ -199,11 +210,27 @@ function updateInstructions() {
 }
 
 // ── Canvas Setup ─────────────────────────────────────────────────────────────
+function isTextInputActive() {
+  return document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.classList.contains("annotation-text-input");
+}
+
 function setupCanvas() {
-  canvas.addEventListener("mousedown", handleMouseDown);
-  canvas.addEventListener("mousemove", handleMouseMove);
-  canvas.addEventListener("mouseup", handleMouseUp);
-  canvas.addEventListener("mouseleave", handleMouseUp);
+  canvas.addEventListener("mousedown", (e) => {
+    if (isTextInputActive()) return;
+    handleMouseDown(e);
+  });
+  canvas.addEventListener("mousemove", (e) => {
+    if (isTextInputActive()) return;
+    handleMouseMove(e);
+  });
+  canvas.addEventListener("mouseup", (e) => {
+    if (isTextInputActive()) return;
+    handleMouseUp(e);
+  });
+  canvas.addEventListener("mouseleave", (e) => {
+    if (isTextInputActive()) return;
+    handleMouseUp(e);
+  });
 
   // Crop overlay events
   cropOverlay.addEventListener("mousedown", handleCropStart);
@@ -213,9 +240,11 @@ function setupCanvas() {
 
 function getCanvasCoords(e) {
   const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
   return {
-    x: e.clientX - rect.left,
-    y: e.clientY - rect.top
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
   };
 }
 
@@ -231,13 +260,20 @@ function handleMouseDown(e) {
   }
 
   if (state.currentTool === "text") {
+    e.preventDefault();
+    e.stopPropagation();
+
     // Create inline text input overlay
     const input = document.createElement("input");
     input.type = "text";
+    input.className = "annotation-text-input";
+    // Position in display (CSS) coordinates
+    const displayScale = state.displayScale || 1;
     input.style.position = "absolute";
-    input.style.left = coords.x + "px";
-    input.style.top = (coords.y - state.lineWidth * 4) + "px";
-    input.style.font = `${state.lineWidth * 4}px 'Syne', sans-serif`;
+    input.style.left = (coords.x / (canvas.width / canvas.getBoundingClientRect().width)) + "px";
+    input.style.top = ((coords.y - state.lineWidth * 4) / (canvas.height / canvas.getBoundingClientRect().height)) + "px";
+    const fontSize = state.lineWidth * 4;
+    input.style.font = `${fontSize * displayScale}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
     input.style.color = state.color;
     input.style.background = "rgba(0,0,0,0.8)";
     input.style.border = "2px solid " + state.color;
@@ -251,9 +287,11 @@ function handleMouseDown(e) {
     input.focus();
     
     const commitText = () => {
+      if (input._committed) return;
+      input._committed = true;
       const text = input.value.trim();
       if (text) {
-        ctx.font = `${state.lineWidth * 4}px 'Syne', sans-serif`;
+        ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
         ctx.fillStyle = state.color;
         ctx.fillText(text, coords.x, coords.y);
         saveHistory();
@@ -262,11 +300,13 @@ function handleMouseDown(e) {
     };
     
     input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
       if (e.key === "Enter") {
         e.preventDefault();
         commitText();
       } else if (e.key === "Escape") {
         e.preventDefault();
+        input._committed = true;
         input.remove();
       }
     });
@@ -404,12 +444,29 @@ function handleCropEnd(e) {
   const height = Math.abs(endY - state.cropStart.y);
 
   if (width > 10 && height > 10) {
-    // Get the cropped area
-    const imageData = ctx.getImageData(left, top, width, height);
+    // Scale display coords to canvas (full resolution) coords
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const canvasLeft = Math.round(left * scaleX);
+    const canvasTop = Math.round(top * scaleY);
+    const canvasWidth = Math.round(width * scaleX);
+    const canvasHeight = Math.round(height * scaleY);
+
+    // Get the cropped area at full resolution
+    const imageData = ctx.getImageData(canvasLeft, canvasTop, canvasWidth, canvasHeight);
 
     // Resize canvas to crop size
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+
+    // Update CSS display size
+    const displayScale = state.displayScale || 1;
+    const cropDisplayW = Math.round(canvasWidth * displayScale) + "px";
+    const cropDisplayH = Math.round(canvasHeight * displayScale) + "px";
+    canvas.style.width = cropDisplayW;
+    canvas.style.height = cropDisplayH;
+    canvasWrapper.style.width = cropDisplayW;
+    canvasWrapper.style.height = cropDisplayH;
 
     // Draw cropped image
     ctx.putImageData(imageData, 0, 0);
@@ -441,7 +498,7 @@ function setupKeyboard() {
       redo();
     }
     // Escape to discard
-    if (e.key === "Escape") {
+    if (e.key === "Escape" && !isTextInputActive()) {
       clearAnnotationData().then(() => window.close());
     }
     // Enter to save

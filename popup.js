@@ -113,6 +113,61 @@ const resultVideo      = $("result-video");
 const btnResultDownloadVideo = $("btn-result-download-video");
 const noteInputWrap    = $("note-input-wrap");
 const btnClearNote     = $("btn-clear-note");
+const tokenEstimate    = $("token-estimate");
+
+// ── Auto-resize textarea ─────────────────────────────────────────────────────
+function autoResizeTextarea(textarea) {
+  textarea.style.height = "auto";
+  textarea.style.height = textarea.scrollHeight + "px";
+}
+
+// ── Token Estimation ─────────────────────────────────────────────────────────
+function estimateTokens() {
+  // Base prompt: ~400 tokens (system prompt + section templates)
+  let tokens = 400;
+
+  // Screenshots: ~170 tokens per image (vision API overhead)
+  tokens += state.screenshots.length * 170;
+
+  // User notes: ~1.3 tokens per word
+  const noteWords = noteInput.value.trim().split(/\s+/).filter(Boolean).length;
+  tokens += Math.round(noteWords * 1.3);
+
+  // Output: ~500 tokens estimated for a typical bug report
+  tokens += 500;
+
+  return tokens;
+}
+
+function updateTokenEstimate() {
+  if (!tokenEstimate) return;
+  const hasScreenshots = state.screenshots.length > 0;
+  const hasNotes = noteInput.value.trim().length > 0;
+
+  if (hasScreenshots || hasNotes) {
+    const est = estimateTokens();
+    tokenEstimate.textContent = `Estimated API usage: ~${est.toLocaleString()} credits`;
+    tokenEstimate.style.display = "block";
+  } else {
+    tokenEstimate.style.display = "none";
+  }
+}
+
+function showTokenUsage(tokenUsage) {
+  const tokenUsageEl = $("token-usage");
+  if (!tokenUsageEl || !tokenUsage) return;
+
+  const parts = [];
+  if (tokenUsage.total) {
+    parts.push(`Used ${tokenUsage.total.toLocaleString()} API credits`);
+    if (tokenUsage.input && tokenUsage.output) {
+      parts.push(`(${tokenUsage.input.toLocaleString()} sent + ${tokenUsage.output.toLocaleString()} received)`);
+    }
+  }
+
+  tokenUsageEl.textContent = parts.join(" ");
+  tokenUsageEl.style.display = "block";
+}
 
 // ── Persist session ───────────────────────────────────────────────────────────
 function saveSession(includeResult = false) {
@@ -154,6 +209,11 @@ async function restoreSession() {
         fieldComp.value   = s.component || "";
         fieldSev.value    = s.severity  || "Medium";
         state.chatHistory = s.chatHistory || [];
+
+        // Auto-resize textarea if note was restored
+        if (noteInput.value) {
+          requestAnimationFrame(() => autoResizeTextarea(noteInput));
+        }
 
         // Restore generated result if exists
         if (s.showingResult && s.generatedTicket) {
@@ -239,6 +299,7 @@ async function checkGenerationStatus() {
         // Generation completed while popup was closed - show result
         resultTextarea.value = genState.ticket;
         state.hasRestoredResult = true;
+        if (genState.tokenUsage) showTokenUsage(genState.tokenUsage);
         // Clear the generation state since we've consumed the result
         chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
         showToast("Ticket generated while popup was closed!", "success");
@@ -266,6 +327,7 @@ function startGenerationPolling() {
         if (genState?.ticket) {
           setLoading(false);
           showResult(genState.ticket);
+          if (genState.tokenUsage) showTokenUsage(genState.tokenUsage);
           showToast("Ticket generated!", "success");
           chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
         } else if (genState?.error) {
@@ -288,6 +350,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     setLoading(false);
     if (msg.ticket) {
       showResult(msg.ticket);
+      if (msg.tokenUsage) showTokenUsage(msg.tokenUsage);
       showToast("Ticket generated!", "success");
     } else if (msg.error) {
       showError("Generation failed: " + msg.error);
@@ -366,6 +429,7 @@ async function init() {
   });
 
   noteInput.addEventListener("input",  () => {
+    autoResizeTextarea(noteInput);
     updateSteps(); updateGenerateBtn(); saveSession(); updateNoteInputClear();
     // Sync manual edits back to content script so speech appends to edited text
     if (state.isListening && !state.isTranscriptUpdate) {
@@ -378,6 +442,7 @@ async function init() {
   // Clear note button
   btnClearNote.addEventListener("click", () => {
     noteInput.value = "";
+    noteInput.style.height = "auto";
     updateNoteInputClear();
     updateSteps();
     updateGenerateBtn();
@@ -612,11 +677,33 @@ function updateSteps() {
 // ── Capture ───────────────────────────────────────────────────────────────────
 const ANNOTATION_DATA_KEY = "bugReporterAnnotationData";
 
+async function getCaptureDelay() {
+  return new Promise(resolve => {
+    chrome.storage.local.get("bugReporterSettings", (result) => {
+      const settings = result.bugReporterSettings || {};
+      resolve(settings.captureDelay || 0);
+    });
+  });
+}
+
+async function waitWithCountdown(seconds) {
+  if (seconds <= 0) return;
+  for (let i = seconds; i > 0; i--) {
+    showToast(`Capturing in ${i}…`, "info");
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
 btnCapture.addEventListener("click", async () => {
   if (state.screenshots.length >= MAX_SCREENSHOTS) {
     showError(`Max ${MAX_SCREENSHOTS} screenshots. Remove one first.`); return;
   }
   btnCapture.disabled = true;
+  const delay = await getCaptureDelay();
+  if (delay > 0) {
+    btnCapture.textContent = `Waiting ${delay}s…`;
+    await waitWithCountdown(delay);
+  }
   btnCapture.textContent = "Capturing…";
   try {
     const res = await chrome.runtime.sendMessage({ type: "CAPTURE_SCREENSHOT" });
@@ -640,6 +727,11 @@ btnAnnotate.addEventListener("click", async () => {
     showError(`Max ${MAX_SCREENSHOTS} screenshots. Remove one first.`); return;
   }
   btnAnnotate.disabled = true;
+  const delay = await getCaptureDelay();
+  if (delay > 0) {
+    btnAnnotate.textContent = `Waiting ${delay}s…`;
+    await waitWithCountdown(delay);
+  }
   btnAnnotate.textContent = "Capturing…";
   try {
     const res = await chrome.runtime.sendMessage({ type: "CAPTURE_SCREENSHOT" });
@@ -822,6 +914,7 @@ function updateGenerateBtn() {
   } else {
     btnGenerate.innerHTML = `<span>📝</span> Add screenshot or notes first`;
   }
+  updateTokenEstimate();
 }
 
 btnGenerate.addEventListener("click", async () => {

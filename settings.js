@@ -102,6 +102,10 @@ async function init() {
   if (webcamSize) $("webcamSize").value = webcamSize.toString();
   if (recordingQuality) $("recordingQuality").value = recordingQuality.toString();
 
+  // Capture delay
+  const captureDelay = s.captureDelay || 0;
+  $("captureDelay").value = captureDelay.toString();
+
   // Mark clean
   setDirty(false);
 
@@ -369,6 +373,7 @@ $("btn-save").addEventListener("click", async () => {
     webcamPosition:       $("webcamPosition") ? $("webcamPosition").value : "bottom-right",
     webcamSize:           $("webcamSize") ? parseInt($("webcamSize").value) : 20,
     recordingQuality:     $("recordingQuality") ? parseInt($("recordingQuality").value) : 720,
+    captureDelay:         $("captureDelay") ? parseInt($("captureDelay").value) : 0,
   };
 
   // Save settings
@@ -416,6 +421,7 @@ $("btn-export").addEventListener("click", () => {
     webcamPosition:       $("webcamPosition") ? $("webcamPosition").value : "bottom-right",
     webcamSize:           $("webcamSize") ? parseInt($("webcamSize").value) : 20,
     recordingQuality:     $("recordingQuality") ? parseInt($("recordingQuality").value) : 720,
+    captureDelay:         $("captureDelay") ? parseInt($("captureDelay").value) : 0,
     exportedAt: new Date().toISOString(),
     version: "1.2"
   };

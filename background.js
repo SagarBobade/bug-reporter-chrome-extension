@@ -202,7 +202,13 @@ async function callGemini({ apiKey, systemPrompt, userPrompt, screenshots }) {
   }
 
   const data = await response.json();
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const tokenUsage = data?.usageMetadata ? {
+    input: data.usageMetadata.promptTokenCount || 0,
+    output: data.usageMetadata.candidatesTokenCount || 0,
+    total: data.usageMetadata.totalTokenCount || 0
+  } : null;
+  return { text, tokenUsage };
 }
 
 // ── OpenAI API ────────────────────────────────────────────────────────────────
@@ -248,7 +254,13 @@ async function callOpenAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
   }
 
   const data = await response.json();
-  return data?.choices?.[0]?.message?.content;
+  const text = data?.choices?.[0]?.message?.content;
+  const tokenUsage = data?.usage ? {
+    input: data.usage.prompt_tokens || 0,
+    output: data.usage.completion_tokens || 0,
+    total: data.usage.total_tokens || 0
+  } : null;
+  return { text, tokenUsage };
 }
 
 // ── Anthropic API ─────────────────────────────────────────────────────────────
@@ -293,7 +305,13 @@ async function callAnthropic({ apiKey, systemPrompt, userPrompt, screenshots }) 
   }
 
   const data = await response.json();
-  return data?.content?.[0]?.text;
+  const text = data?.content?.[0]?.text;
+  const tokenUsage = data?.usage ? {
+    input: data.usage.input_tokens || 0,
+    output: data.usage.output_tokens || 0,
+    total: (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0)
+  } : null;
+  return { text, tokenUsage };
 }
 
 // ── xAI Grok API ──────────────────────────────────────────────────────────────
@@ -339,7 +357,13 @@ async function callXAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
   }
 
   const data = await response.json();
-  return data?.choices?.[0]?.message?.content;
+  const text = data?.choices?.[0]?.message?.content;
+  const tokenUsage = data?.usage ? {
+    input: data.usage.prompt_tokens || 0,
+    output: data.usage.completion_tokens || 0,
+    total: data.usage.total_tokens || 0
+  } : null;
+  return { text, tokenUsage };
 }
 
 // ── Universal AI Call ─────────────────────────────────────────────────────────
@@ -364,13 +388,16 @@ async function generateTicket({ screenshots, audioNote, pageUrl, pageTitle, scre
   const hasScreenshots = screenshots && screenshots.length > 0;
   const { systemPrompt, userPrompt } = buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasScreenshots });
 
-  let text = await callAI({
+  let result = await callAI({
     provider,
     apiKey: key,
     systemPrompt,
     userPrompt,
     screenshots: hasScreenshots ? screenshots : []
   });
+
+  let text = result?.text || result; // Handle both new {text, tokenUsage} and legacy string format
+  const tokenUsage = result?.tokenUsage || null;
 
   if (!text) throw new Error("Empty response from AI");
 
@@ -388,7 +415,7 @@ async function generateTicket({ screenshots, audioNote, pageUrl, pageTitle, scre
     }
   }
 
-  return text;
+  return { text, tokenUsage };
 }
 
 // ── Screenshot capture ────────────────────────────────────────────────────────
@@ -502,7 +529,7 @@ ${feedback}
 
 Please improve the ticket based on this feedback. Return only the updated ticket.`;
 
-  const text = await callAI({
+  const result = await callAI({
     provider,
     apiKey: key,
     systemPrompt,
@@ -510,6 +537,7 @@ Please improve the ticket based on this feedback. Return only the updated ticket
     screenshots: screenshots || []
   });
 
+  const text = result?.text || result;
   if (!text) throw new Error("Empty response from AI");
   return text;
 }
@@ -557,16 +585,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       payload: msg.payload
     }).then(() => {
       generateTicket({ screenshots, audioNote, pageUrl, pageTitle, screenInfo })
-        .then(async (ticket) => {
+        .then(async (result) => {
+          const ticket = result?.text || result;
+          const tokenUsage = result?.tokenUsage || null;
           await setGenerationState({
             isGenerating: false,
             generationId,
             completedAt: Date.now(),
             ticket,
+            tokenUsage,
             error: null
           });
           try {
-            chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, ticket });
+            chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, ticket, tokenUsage });
           } catch (e) { /* popup closed */ }
         })
         .catch(async (err) => {

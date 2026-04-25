@@ -1065,7 +1065,7 @@
 
 <!-- ── Header ────────────────────────────────────────────── -->
 <div class="header">
-  <div class="logo">🪲</div>
+  <div class="logo"><img src="icons/icon2.png" alt="Bug Reporter" width="30" height="30" style="display:block;" /></div>
   <div class="header-text">
     <h1>Bug Reporter</h1>
     <p>Ticket Generator</p>
@@ -1154,6 +1154,7 @@
           id="note-input"
           placeholder="Describe what you were doing, what broke, what you expected… (or record voice)"
           rows="2"
+          style="overflow: hidden; resize: none;"
         ></textarea>
         <button class="btn-clear-input" id="btn-clear-note" title="Clear text">✕</button>
       </div>
@@ -1179,6 +1180,7 @@
       <span>✨</span>
       Generate Ticket
     </button>
+    <div id="token-estimate" class="token-info" style="display:none;"></div>
 
     <div class="loading-bar" id="loading-bar"><div class="loading-bar-fill"></div></div>
     <div class="loading-text" id="loading-text">Gemini is analyzing screenshots…</div>
@@ -1196,6 +1198,7 @@
     </div>
 
     <textarea class="result-textarea" id="result-textarea" readonly></textarea>
+    <div id="token-usage" class="token-info" style="display:none;"></div>
 
     <!-- Collapsible Input Edit Section -->
     <div id="input-edit-section" class="input-edit-section">

@@ -363,3 +363,16 @@ textarea {
 .pulse { animation: pulse 2s ease-in-out infinite; }
 .blink { animation: blink 1s ease-in-out infinite; }
 .spin { animation: spin 1s linear infinite; }
+
+/* ── Token Info ────────────────────────────────────────────────── */
+.token-info {
+  font-size: var(--text-xs);
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  color: var(--text-muted);
+  padding: var(--space-xs) var(--space-sm);
+  background: rgba(79, 70, 229, 0.08);
+  border: 1px solid rgba(79, 70, 229, 0.15);
+  border-radius: var(--radius-md);
+  text-align: center;
+  margin-top: var(--space-xs);
+}
