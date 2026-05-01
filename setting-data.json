@@ -1,0 +1,26 @@
+{
+  "aiProvider": "gemini",
+  "domainContext": "Product for companies which produces and manage Movie, Drama, Documentaries from Planning to Release.",
+  "techStack": "Typescript, React, Go, Mongo DB.",
+  "summaryFormat": "[Module]: [Feature/Component]: [Issue description]",
+  "summaryGuidelines": "Include:\n1. Keep it self-explanatory (understandable without context).\n2. Use present tense.\n3. Try hard for a simplest form.\n4. Clearly describe what is wrong, not how to fix it.\n6. Mention condition/context if needed.\n7. Short, clear, self-explanatory description.\n\nAvoid:\n1. Avoid vague words like issue, problem, bug.",
+  "descriptionGuidelines": "Include :\nSteps to reproduce -\n•Use action-based steps\n•Start with navigation\n•Keep concise, no unnecessary steps\n•Use “Navigate”, “Click”, “Enter”, “Observe” like keywords\nExpected Result -\n•Describe correct system behavior\n•Keep it clear and direct\nActual Result -\n•Describe what is happening incorrectly\n•Avoid assumptions\nBusiness/UX Impact -\n•Impactful sentence \n•User confusion\n•Data inconsistency\n•Workflow disruption\n•UX inconsistency",
+  "extraInstructions": "Avoid\n•Vague summaries\n•Mixing multiple issues in one ticket\n•Long paragraphs in steps\n•Technical assumptions (unless confirmed)\n•Avoid Words like: something, issue, not working properly\n•Avoid long explanations",
+  "enabledSections": [
+    "summary",
+    "steps",
+    "expected",
+    "actual",
+    "impact"
+  ],
+  "enabledFields": [],
+  "customSections": [],
+  "videoRecordingEnabled": true,
+  "webcamEnabled": false,
+  "webcamPosition": "bottom-right",
+  "webcamSize": 20,
+  "recordingQuality": 720,
+  "captureDelay": 0,
+  "exportedAt": "2026-04-12T09:15:50.572Z",
+  "version": "1.2"
+}

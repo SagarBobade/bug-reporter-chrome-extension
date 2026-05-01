@@ -1,5 +1,61 @@
 // background.js — BugReporter service worker
 
+// ── Installation Handler: Auto-apply default settings ────────────────────────
+chrome.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason === 'install') {
+    console.log('BugReporter: First installation detected, loading default settings...');
+    await initializeDefaultSettings();
+  }
+});
+
+async function initializeDefaultSettings() {
+  try {
+    // Check if settings already exist (shouldn't on first install, but safety check)
+    const existing = await new Promise(resolve => {
+      chrome.storage.local.get('bugReporterSettings', result => resolve(result.bugReporterSettings));
+    });
+
+    // If settings already exist, don't overwrite
+    if (existing && Object.keys(existing).length > 0) {
+      console.log('BugReporter: Settings already exist, skipping default initialization');
+      return;
+    }
+
+    // Fetch default settings from setting-data.json
+    const url = chrome.runtime.getURL('setting-data.json');
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch setting-data.json: ${response.status}`);
+    }
+
+    const defaultSettings = await response.json();
+
+    // Remove exportedAt and version fields (not needed in storage)
+    delete defaultSettings.exportedAt;
+    delete defaultSettings.version;
+
+    // Ensure API keys are empty (security - users must add their own)
+    defaultSettings.geminiApiKey = '';
+    defaultSettings.openaiApiKey = '';
+    defaultSettings.anthropicApiKey = '';
+    defaultSettings.xaiApiKey = '';
+
+    // Save to storage
+    await new Promise(resolve => {
+      chrome.storage.local.set({ bugReporterSettings: defaultSettings }, resolve);
+    });
+
+    console.log('BugReporter: Default settings applied successfully');
+    console.log('BugReporter: User needs to add API key in settings');
+
+  } catch (error) {
+    console.error('BugReporter: Failed to load default settings:', error);
+    console.log('BugReporter: Extension will work with empty settings');
+    // Extension continues to work normally even if defaults fail to load
+  }
+}
+
 // ── Generation State Storage Key ─────────────────────────────────────────────
 const GENERATION_STATE_KEY = "bugReporterGenerationState";
 
