@@ -165,7 +165,7 @@
       font-size: 11px;
       font-family: 'SF Mono', Monaco, monospace;
       color: var(--muted);
-      min-width: 24px;
+      min-width: 28px;
     }
 
     /* ── Canvas Area ─────────────────────────────────────────── */
@@ -189,6 +189,7 @@
     #canvas {
       display: block;
       cursor: crosshair;
+      user-select: none;
     }
 
     /* Crop overlay */
@@ -278,12 +279,6 @@
   <div class="color-picker-wrapper">
     <span class="color-picker-label">Color:</span>
     <input type="color" class="color-picker" id="color-picker" value="#ff6b35" />
-  </div>
-
-  <div class="size-slider-wrapper">
-    <span class="color-picker-label">Size:</span>
-    <input type="range" class="size-slider" id="size-slider" min="1" max="20" value="4" />
-    <span class="size-value" id="size-value">15</span>
   </div>
 
   <div class="tool-group">

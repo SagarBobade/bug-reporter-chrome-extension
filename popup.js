@@ -110,13 +110,19 @@ const btnDeleteVideo   = $("btn-delete-video");
 const btnDownloadVideo = $("btn-download-video");
 const videoInfoText    = $("video-info-text");
 const resultVideo      = $("result-video");
+const resultVideoPlayer = $("result-video-player");
 const btnResultDownloadVideo = $("btn-result-download-video");
+const btnResultDeleteVideo = $("btn-result-delete-video");
+
 const noteInputWrap    = $("note-input-wrap");
 const btnClearNote     = $("btn-clear-note");
 const tokenEstimate    = $("token-estimate");
 
-// ── Auto-resize textarea ─────────────────────────────────────────────────────
+// ── Auto-resize textarea (for non-note textareas only) ──────────────────────
 function autoResizeTextarea(textarea) {
+  // Skip auto-resize for note input - it now uses fixed height with scrollbar
+  if (textarea.id === 'note-input') return;
+  
   textarea.style.height = "auto";
   textarea.style.height = textarea.scrollHeight + "px";
 }
@@ -169,13 +175,14 @@ function showTokenUsage(tokenUsage) {
   tokenUsageEl.style.display = "block";
 }
 
-// ── Persist session ───────────────────────────────────────────────────────────
+// Persist session ───────────────────────────────────────────────────────────
 function saveSession(includeResult = false) {
   const data = {
     screenshots: state.screenshots,
     note:        noteInput.value,
     component:   fieldComp.value,
     severity:    fieldSev.value,
+    videoBlobUrl: state.videoBlobUrl, // Persist video URL
   };
 
   // Optionally save the generated result
@@ -209,10 +216,21 @@ async function restoreSession() {
         fieldComp.value   = s.component || "";
         fieldSev.value    = s.severity  || "Medium";
         state.chatHistory = s.chatHistory || [];
+        
+        // Restore video if available
+        if (s.videoBlobUrl) {
+          state.videoBlobUrl = s.videoBlobUrl;
+          // Show video UI
+          if (videoPreview) {
+            videoPreview.style.display = "block";
+            btnRecord.style.display = "none";
+            videoInfoText.textContent = "🎬 Video recorded (download to attach)";
+          }
+        }
 
         // Auto-resize textarea if note was restored
         if (noteInput.value) {
-          requestAnimationFrame(() => autoResizeTextarea(noteInput));
+          // Note: no auto-resize for note input - uses scrollbar instead
         }
 
         // Restore generated result if exists
@@ -365,21 +383,50 @@ async function checkAnnotationResult() {
     chrome.storage.local.get(ANNOTATION_DATA_KEY, (result) => {
       const data = result[ANNOTATION_DATA_KEY];
       if (data && data.completed && data.result) {
+        console.log('Annotation result data:', data); // Debug log
+        console.log('Current screenshots length:', state.screenshots.length); // Debug log
+        
         // Check if this is an edit of existing screenshot
-        if (typeof data.editIndex === "number" && data.editIndex < state.screenshots.length) {
+        if (typeof data.editIndex === "number" && data.editIndex >= 0 && data.editIndex < state.screenshots.length) {
+          console.log('Replacing screenshot at index:', data.editIndex); // Debug log
           // Replace existing screenshot
           state.screenshots[data.editIndex] = data.result;
           showToast("Screenshot updated!", "success");
+          
+          // Save session and update UI regardless of source
+          saveSession();
+          renderGrid();
+          updateGenerateBtn();
+          
+          // If editing from result panel, return to result panel
+          if (data.fromResultPanel) {
+            displayResultPanel();
+          }
         } else {
-          // Add as new screenshot
-          if (state.screenshots.length < MAX_SCREENSHOTS) {
+          console.log('Adding as new screenshot. EditIndex:', data.editIndex, 'Screenshots length:', state.screenshots.length); // Debug log
+          // Add as new screenshot only if we have space and it's truly a new capture
+          if (state.screenshots.length < MAX_SCREENSHOTS && (data.editIndex === undefined || data.editIndex === null)) {
             state.screenshots.push(data.result);
             showToast("Annotated screenshot added!", "success");
+            saveSession();
+            renderGrid();
+            updateGenerateBtn();
+          } else if (data.editIndex !== undefined && data.editIndex !== null) {
+            // This is an edit but index is out of bounds - treat as replacement of last screenshot
+            console.warn('Edit index out of bounds, replacing last screenshot');
+            if (state.screenshots.length > 0) {
+              state.screenshots[state.screenshots.length - 1] = data.result;
+              showToast("Screenshot updated!", "success");
+              saveSession();
+              renderGrid();
+              updateGenerateBtn();
+              if (data.fromResultPanel) {
+                displayResultPanel();
+              }
+            }
           }
         }
-        saveSession();
-        renderGrid();
-        updateGenerateBtn();
+        
         // Clear annotation data
         chrome.storage.local.remove(ANNOTATION_DATA_KEY);
       }
@@ -429,7 +476,7 @@ async function init() {
   });
 
   noteInput.addEventListener("input",  () => {
-    autoResizeTextarea(noteInput);
+    // Note: no auto-resize for note input - uses scrollbar instead
     updateSteps(); updateGenerateBtn(); saveSession(); updateNoteInputClear();
     // Sync manual edits back to content script so speech appends to edited text
     if (state.isListening && !state.isTranscriptUpdate) {
@@ -654,6 +701,32 @@ async function openScreenshotForEdit(index) {
   });
 }
 
+// Edit screenshot from result panel
+async function editScreenshotFromResult(index) {
+  if (index < 0 || index >= state.screenshots.length) return;
+
+  const screenshot = state.screenshots[index];
+  
+  // Get current tab ID to return to later
+  const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  // Store screenshot for annotation editor along with return info
+  chrome.storage.local.set({
+    [ANNOTATION_DATA_KEY]: {
+      screenshot: screenshot,
+      completed: false,
+      returnTabId: currentTab?.id || null,
+      editIndex: index,  // Track which screenshot we're editing
+      fromResultPanel: true  // Flag to return to result panel
+    }
+  }, () => {
+    // Open annotation editor in new tab
+    chrome.tabs.create({
+      url: chrome.runtime.getURL("annotate.html")
+    });
+  });
+}
+
 function removeScreenshot(index) {
   state.screenshots.splice(index, 1);
   saveSession();
@@ -775,17 +848,28 @@ btnRecord.addEventListener("click", async () => {
     return;
   }
 
-  // Store target tab ID for recorder to use
+  btnRecord.disabled = true;
+  btnRecord.textContent = "Opening recorder...";
+
+  // Get capture delay to pass to recorder
+  const delay = await getCaptureDelay();
+
+  // Store target tab ID and delay for recorder to use
   chrome.storage.local.set({
     [VIDEO_RECORDING_KEY]: {
       targetTabId: currentTab.id,
-      isRecording: false
+      isRecording: false,
+      captureDelay: delay // Pass delay to recorder
     }
   }, () => {
     // Open dedicated recording page in new tab
     chrome.tabs.create({
       url: chrome.runtime.getURL("recorder.html")
     });
+    
+    // Reset button state
+    btnRecord.disabled = false;
+    btnRecord.innerHTML = `<span>🎬</span> Record Video`;
   });
 });
 
@@ -809,8 +893,8 @@ async function checkVideoRecording() {
         btnRecord.style.display = "none";
         videoInfoText.textContent = "🎬 Video recorded (download to attach)";
 
-        // Add transcript to notes if available
-        if (data.transcript && data.transcript.trim()) {
+        // Add transcript to notes if available and not already added
+        if (data.transcript && data.transcript.trim() && !data.transcriptAdded) {
           const existingNotes = noteInput.value.trim();
           const transcriptText = `[Voice transcript] ${data.transcript.trim()}`;
 
@@ -822,12 +906,16 @@ async function checkVideoRecording() {
           saveSession();
           updateGenerateBtn();
           showToast("Voice transcript added to notes!", "info");
+          
+          // Mark transcript as added to prevent re-adding
+          data.transcriptAdded = true;
+          chrome.storage.local.set({ [VIDEO_RECORDING_KEY]: data });
         }
 
         showToast("Video ready for download!", "success");
 
-        // Clear the recording data from storage (blob URL stays in memory)
-        chrome.storage.local.remove(VIDEO_RECORDING_KEY);
+        // Keep the recording data in storage for persistence across popup sessions
+        // Only remove when user explicitly deletes or resets
       }
       resolve();
     });
@@ -842,6 +930,18 @@ btnDownloadVideo.addEventListener("click", () => {
 // Download video from result panel
 btnResultDownloadVideo.addEventListener("click", () => {
   downloadVideo();
+});
+
+// Delete video from result panel
+btnResultDeleteVideo.addEventListener("click", async () => {
+  const confirmed = await showConfirmDialog(
+    "Remove Video?",
+    "This will remove the video from this bug report. You can still record a new one.",
+    "Remove"
+  );
+  if (confirmed) {
+    deleteVideo();
+  }
 });
 
 function downloadVideo() {
@@ -861,6 +961,33 @@ function downloadVideo() {
   showToast("Video downloaded!", "success");
 }
 
+// Shared function to delete video
+function deleteVideo() {
+  // Revoke blob URL to free memory
+  if (state.videoBlobUrl) {
+    URL.revokeObjectURL(state.videoBlobUrl);
+    state.videoBlobUrl = null;
+  }
+
+  // Clear video from storage
+  chrome.storage.local.remove(VIDEO_RECORDING_KEY);
+
+  // Reset capture panel UI
+  videoPreview.style.display = "none";
+  btnRecord.style.display = "block";
+
+  // Update result panel if it's visible
+  if (resultVideo) {
+    resultVideo.style.display = "none";
+    resultVideoPlayer.src = "";
+  }
+  
+  // Update session storage
+  saveSession();
+
+  showToast("Video removed", "info");
+}
+
 // Delete video
 btnDeleteVideo.addEventListener("click", async () => {
   const confirmed = await showConfirmDialog(
@@ -870,17 +997,7 @@ btnDeleteVideo.addEventListener("click", async () => {
   );
   if (!confirmed) return;
 
-  // Revoke blob URL to free memory
-  if (state.videoBlobUrl) {
-    URL.revokeObjectURL(state.videoBlobUrl);
-    state.videoBlobUrl = null;
-  }
-
-  // Reset UI
-  videoPreview.style.display = "none";
-  btnRecord.style.display = "block";
-
-  showToast("Video deleted", "info");
+  deleteVideo();
 });
 
 // ── Clear all screenshots ──────────────────────────────────────────────────
@@ -1008,22 +1125,65 @@ function displayResultPanel() {
   if (state.screenshots.length > 0) {
     screenshotsGrid.innerHTML = "";
     state.screenshots.forEach((src, i) => {
+      // Create screenshot container with image and controls
+      const screenshotContainer = document.createElement("div");
+      screenshotContainer.style.cssText = "position: relative; display: inline-block; margin: 2px;";
+      
       const img = document.createElement("img");
       img.src = src;
       img.alt = `Screenshot ${i + 1}`;
       img.title = `Screenshot ${i + 1} - Click to copy`;
-      img.style.cssText = "max-width: 110px; height: auto; border-radius: 4px; border: 1px solid var(--border); cursor: pointer;";
+      img.style.cssText = "max-width: 110px; height: auto; border-radius: 4px; border: 1px solid var(--border); cursor: pointer; display: block;";
       img.addEventListener("click", () => copyImageToClipboard(src, i + 1));
-      screenshotsGrid.appendChild(img);
+      
+      // Create edit button overlay
+      const editBtn = document.createElement("button");
+      editBtn.innerHTML = "✏️";
+      editBtn.title = `Edit screenshot ${i + 1}`;
+      editBtn.style.cssText = `
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        background: rgba(0,0,0,0.7);
+        border: none;
+        border-radius: 4px;
+        color: white;
+        font-size: 10px;
+        padding: 2px 4px;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.2s;
+      `;
+      editBtn.addEventListener("click", (e) => {
+        e.stopPropagation(); // Prevent triggering image copy
+        editScreenshotFromResult(i);
+      });
+      
+      // Show edit button on hover
+      screenshotContainer.addEventListener("mouseenter", () => {
+        editBtn.style.opacity = "1";
+      });
+      screenshotContainer.addEventListener("mouseleave", () => {
+        editBtn.style.opacity = "0";
+      });
+      
+      screenshotContainer.appendChild(img);
+      screenshotContainer.appendChild(editBtn);
+      screenshotsGrid.appendChild(screenshotContainer);
     });
     screenshotsContainer.style.display = "block";
   } else {
     screenshotsContainer.style.display = "none";
   }
 
-  // Show video download button if video is available
+  // Show video preview and controls if video is available
   if (resultVideo) {
-    resultVideo.style.display = state.videoBlobUrl ? "block" : "none";
+    if (state.videoBlobUrl) {
+      resultVideo.style.display = "block";
+      resultVideoPlayer.src = state.videoBlobUrl;
+    } else {
+      resultVideo.style.display = "none";
+    }
   }
 }
 
@@ -1042,6 +1202,56 @@ async function copyImageToClipboard(dataUrl, index) {
   }
 }
 
+// Create composite image from multiple screenshots
+async function createCompositeImage(screenshots) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  
+  // Load all images first
+  const images = await Promise.all(screenshots.map(src => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }));
+  
+  // Calculate layout for composite image
+  const maxWidth = Math.max(...images.map(img => img.width));
+  const totalHeight = images.reduce((sum, img) => sum + img.height, 0);
+  const padding = 10;
+  const headerHeight = 30;
+  
+  // Set canvas size
+  canvas.width = maxWidth + (padding * 2);
+  canvas.height = totalHeight + (padding * (images.length + 1)) + (headerHeight * images.length);
+  
+  // Fill background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  // Draw images with labels
+  let currentY = padding;
+  images.forEach((img, index) => {
+    // Draw label
+    ctx.fillStyle = '#333333';
+    ctx.font = '16px Arial, sans-serif';
+    ctx.fillText(`Screenshot ${index + 1}`, padding, currentY + 20);
+    currentY += headerHeight;
+    
+    // Draw image
+    const x = Math.max(0, (canvas.width - img.width) / 2);
+    ctx.drawImage(img, x, currentY);
+    currentY += img.height + padding;
+  });
+  
+  // Convert to blob
+  return new Promise(resolve => {
+    canvas.toBlob(resolve, 'image/png', 0.9);
+  });
+}
+
 function showCopyFeedback(msg) {
   btnCopy.textContent = msg;
   btnCopy.classList.add("copied");
@@ -1050,32 +1260,104 @@ function showCopyFeedback(msg) {
 
 btnCopy.addEventListener("click", async () => {
   try {
-    // Try to copy as rich HTML with images for rich text editors
-    const textContent = resultTextarea.value;
-
-    // Create HTML version with embedded images
-    let htmlContent = textContent
+    let textContent = resultTextarea.value;
+    
+    // Add attachment instructions to text content if we have media
+    const hasAttachments = state.screenshots.length > 0 || state.videoBlobUrl;
+    if (hasAttachments) {
+      textContent += '\n\n--- ATTACHMENTS ---\n';
+      if (state.screenshots.length > 0) {
+        textContent += `📷 ${state.screenshots.length} screenshot${state.screenshots.length > 1 ? 's' : ''} (will be copied with this text)\n`;
+      }
+      if (state.videoBlobUrl) {
+        textContent += '🎬 1 screen recording (use download button below - cannot be pasted directly)\n';
+      }
+    }
+    
+    // Prepare clipboard items with multiple formats
+    const clipboardItems = {};
+    
+    // Enhanced text content
+    clipboardItems['text/plain'] = new Blob([textContent], { type: 'text/plain' });
+    
+    // Enhanced HTML version
+    let htmlContent = resultTextarea.value
       .replace(/^## (.+)$/gm, '<h2>$1</h2>')
       .replace(/\n/g, '<br>');
+    
+    if (hasAttachments) {
+      htmlContent += '<br><br><strong>Attachments:</strong><br>';
+      if (state.screenshots.length > 0) {
+        htmlContent += `📷 ${state.screenshots.length} screenshot${state.screenshots.length > 1 ? 's' : ''} (copied below)<br>`;
+      }
+      if (state.videoBlobUrl) {
+        htmlContent += '🎬 1 screen recording (download separately)<br>';
+      }
+    }
+    
+    clipboardItems['text/html'] = new Blob([htmlContent], { type: 'text/html' });
+    
+    // Strategy: Create a composite image if multiple screenshots, or use single image
+    if (state.screenshots.length === 1) {
+      // Single screenshot - copy as-is
+      try {
+        const response = await fetch(state.screenshots[0]);
+        const blob = await response.blob();
+        clipboardItems['image/png'] = blob;
+      } catch (err) {
+        console.warn('Failed to include screenshot:', err);
+      }
+    } else if (state.screenshots.length > 1) {
+      // Multiple screenshots - create a composite image
+      try {
+        const compositeBlob = await createCompositeImage(state.screenshots);
+        clipboardItems['image/png'] = compositeBlob;
+      } catch (err) {
+        console.warn('Failed to create composite image, using first screenshot:', err);
+        try {
+          const response = await fetch(state.screenshots[0]);
+          const blob = await response.blob();
+          clipboardItems['image/png'] = blob;
+        } catch (err2) {
+          console.warn('Failed to include any screenshot:', err2);
+        }
+      }
+    }
 
-    // Try to write both HTML and plain text to clipboard
-    const textBlob = new Blob([textContent], { type: 'text/plain' });
-    const htmlBlob = new Blob([htmlContent], { type: 'text/html' });
-
-    await navigator.clipboard.write([
-      new ClipboardItem({
-        'text/plain': textBlob,
-        'text/html': htmlBlob
-      })
-    ]);
+    // Write everything to clipboard in one operation
+    await navigator.clipboard.write([new ClipboardItem(clipboardItems)]);
 
     showCopyFeedback("✓ Copied!");
-    showToast("Ticket copied to clipboard!", "success");
+    
+    let toastMessage = "Ticket copied to clipboard!";
+    if (state.screenshots.length === 1) {
+      toastMessage = "Ticket + screenshot copied!";
+    } else if (state.screenshots.length > 1) {
+      toastMessage = `Ticket + composite image (${state.screenshots.length} screenshots) copied!`;
+    }
+    if (state.videoBlobUrl) {
+      toastMessage += " Use download button for video.";
+    }
+    
+    showToast(toastMessage, "success");
+    
   } catch (err) {
+    console.error('Clipboard copy failed:', err);
     // Fallback to plain text copy
-    await navigator.clipboard.writeText(resultTextarea.value);
+    let fallbackText = resultTextarea.value;
+    if (state.screenshots.length > 0 || state.videoBlobUrl) {
+      fallbackText += '\n\n--- ATTACHMENTS ---\n';
+      if (state.screenshots.length > 0) {
+        fallbackText += `📷 ${state.screenshots.length} screenshot${state.screenshots.length > 1 ? 's' : ''} (click individual screenshots to copy)\n`;
+      }
+      if (state.videoBlobUrl) {
+        fallbackText += '🎬 1 screen recording (use download button)\n';
+      }
+    }
+    
+    await navigator.clipboard.writeText(fallbackText);
     showCopyFeedback("✓ Copied!");
-    showToast("Ticket copied to clipboard!", "success");
+    showToast("Ticket copied! Click screenshots individually or use download button for video.", "warning");
   }
 });
 
@@ -1155,6 +1437,8 @@ btnReset.addEventListener("click", async () => {
     URL.revokeObjectURL(state.videoBlobUrl);
     state.videoBlobUrl = null;
   }
+  // Clear video recording data
+  chrome.storage.local.remove(VIDEO_RECORDING_KEY);
   noteInput.value = ""; fieldComp.value = ""; fieldSev.value = "Medium";
   resultTextarea.value = "";
   clearSession();
@@ -1366,3 +1650,5 @@ chatInput.addEventListener("keydown", (e) => {
 });
 
 init();
+
+// Note: Video trimming functionality moved to recorder.js screen for better UX

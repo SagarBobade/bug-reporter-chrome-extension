@@ -7,7 +7,8 @@ const state = {
   originalImage: null,
   currentTool: "draw",
   color: "#ff6b35",
-  lineWidth: 4,
+  fontSize: 48, // Maximum font size by default
+  lineWidth: 12, // Derived from fontSize
   isDrawing: false,
   startX: 0,
   startY: 0,
@@ -15,15 +16,289 @@ const state = {
   historyIndex: -1,
   cropStart: null,
   cropEnd: null,
+  zoom: 1,
+  clipboard: null,
+  // New state for interactive annotations
+  annotations: [],
+  selectedAnnotation: null,
+  resizeHandle: null,
+  isDragging: false,
+  dragOffset: { x: 0, y: 0 },
+  currentStroke: [], // For freehand drawing
 };
+
+// ── Annotation Classes ──────────────────────────────────────────────────────
+class Annotation {
+  constructor(type, x, y, color, lineWidth) {
+    this.type = type;
+    this.x = x;
+    this.y = y;
+    this.color = color;
+    this.lineWidth = lineWidth;
+    this.selected = false;
+    this.id = Date.now() + Math.random();
+  }
+
+  getBounds() {
+    return { x: this.x, y: this.y, width: 0, height: 0 };
+  }
+
+  isPointInside(x, y) {
+    const bounds = this.getBounds();
+    return x >= bounds.x && x <= bounds.x + bounds.width &&
+           y >= bounds.y && y <= bounds.y + bounds.height;
+  }
+
+  draw(ctx) {
+    // Override in subclasses
+  }
+
+  drawSelection(ctx) {
+    if (!this.selected) return;
+    const bounds = this.getBounds();
+    
+    // Selection outline
+    ctx.strokeStyle = "#4f46e5";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    ctx.strokeRect(bounds.x - 5, bounds.y - 5, bounds.width + 10, bounds.height + 10);
+    ctx.setLineDash([]);
+
+    // Resize handles
+    const handles = this.getResizeHandles();
+    handles.forEach(handle => {
+      ctx.fillStyle = "#4f46e5";
+      ctx.fillRect(handle.x - 4, handle.y - 4, 8, 8);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(handle.x - 4, handle.y - 4, 8, 8);
+    });
+  }
+
+  getResizeHandles() {
+    const bounds = this.getBounds();
+    return [
+      { x: bounds.x, y: bounds.y, type: 'nw' }, // northwest
+      { x: bounds.x + bounds.width, y: bounds.y, type: 'ne' }, // northeast  
+      { x: bounds.x, y: bounds.y + bounds.height, type: 'sw' }, // southwest
+      { x: bounds.x + bounds.width, y: bounds.y + bounds.height, type: 'se' }, // southeast
+    ];
+  }
+
+  getResizeHandleAt(x, y) {
+    if (!this.selected) return null;
+    const handles = this.getResizeHandles();
+    for (let handle of handles) {
+      if (Math.abs(x - handle.x) <= 6 && Math.abs(y - handle.y) <= 6) {
+        return handle;
+      }
+    }
+    return null;
+  }
+}
+
+class RectAnnotation extends Annotation {
+  constructor(x, y, width, height, color, lineWidth) {
+    super('rect', x, y, color, lineWidth);
+    this.width = width;
+    this.height = height;
+  }
+
+  getBounds() {
+    return { 
+      x: Math.min(this.x, this.x + this.width),
+      y: Math.min(this.y, this.y + this.height),
+      width: Math.abs(this.width), 
+      height: Math.abs(this.height) 
+    };
+  }
+
+  draw(ctx) {
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = this.lineWidth;
+    ctx.strokeRect(this.x, this.y, this.width, this.height);
+  }
+
+  resize(handle, deltaX, deltaY) {
+    if (handle.type === 'se') {
+      this.width += deltaX;
+      this.height += deltaY;
+    } else if (handle.type === 'nw') {
+      this.x += deltaX;
+      this.y += deltaY; 
+      this.width -= deltaX;
+      this.height -= deltaY;
+    } else if (handle.type === 'ne') {
+      this.y += deltaY;
+      this.width += deltaX;
+      this.height -= deltaY;
+    } else if (handle.type === 'sw') {
+      this.x += deltaX;
+      this.width -= deltaX;
+      this.height += deltaY;
+    }
+  }
+}
+
+class ArrowAnnotation extends Annotation {
+  constructor(x1, y1, x2, y2, color, lineWidth) {
+    super('arrow', x1, y1, color, lineWidth);
+    this.x2 = x2;
+    this.y2 = y2;
+  }
+
+  getBounds() {
+    return {
+      x: Math.min(this.x, this.x2),
+      y: Math.min(this.y, this.y2),
+      width: Math.abs(this.x2 - this.x),
+      height: Math.abs(this.y2 - this.y)
+    };
+  }
+
+  draw(ctx) {
+    const headLength = Math.max(8, this.lineWidth * 3); // Ensure visible arrowhead
+    const angle = Math.atan2(this.y2 - this.y, this.x2 - this.x);
+
+    ctx.strokeStyle = this.color;
+    ctx.fillStyle = this.color;
+    ctx.lineWidth = this.lineWidth;
+    ctx.lineCap = "round";
+
+    // Line
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(this.x2, this.y2);
+    ctx.stroke();
+
+    // Arrowhead
+    ctx.beginPath();
+    ctx.moveTo(this.x2, this.y2);
+    ctx.lineTo(
+      this.x2 - headLength * Math.cos(angle - Math.PI / 6),
+      this.y2 - headLength * Math.sin(angle - Math.PI / 6)
+    );
+    ctx.lineTo(
+      this.x2 - headLength * Math.cos(angle + Math.PI / 6),
+      this.y2 - headLength * Math.sin(angle + Math.PI / 6)
+    );
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  resize(handle, deltaX, deltaY) {
+    if (handle.type === 'se') {
+      this.x2 += deltaX;
+      this.y2 += deltaY;
+    } else if (handle.type === 'nw') {
+      this.x += deltaX;
+      this.y += deltaY;
+    }
+  }
+}
+
+class DrawingAnnotation extends Annotation {
+  constructor(color, lineWidth) {
+    super('drawing', 0, 0, color, lineWidth);
+    this.strokes = [];
+    this.bounds = null;
+  }
+
+  addPoint(x, y) {
+    this.strokes.push({ x, y });
+    this.updateBounds();
+  }
+
+  updateBounds() {
+    if (this.strokes.length === 0) return;
+    
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    this.strokes.forEach(point => {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    });
+    
+    const padding = Math.max(5, this.lineWidth);
+    this.bounds = { x: minX - padding, y: minY - padding, width: maxX - minX + padding * 2, height: maxY - minY + padding * 2 };
+  }
+
+  getBounds() {
+    return this.bounds || { x: 0, y: 0, width: 0, height: 0 };
+  }
+
+  draw(ctx) {
+    if (this.strokes.length < 2) return;
+    
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = this.lineWidth;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    
+    ctx.beginPath();
+    ctx.moveTo(this.strokes[0].x, this.strokes[0].y);
+    for (let i = 1; i < this.strokes.length; i++) {
+      ctx.lineTo(this.strokes[i].x, this.strokes[i].y);
+    }
+    ctx.stroke();
+  }
+
+  move(deltaX, deltaY) {
+    this.strokes.forEach(stroke => {
+      stroke.x += deltaX;
+      stroke.y += deltaY;
+    });
+    this.updateBounds();
+  }
+}
+
+class TextAnnotation extends Annotation {
+  constructor(x, y, text, color, fontSize) {
+    super('text', x, y, color, 1); // lineWidth not used for text
+    this.text = text;
+    this.fontSize = fontSize;
+  }
+
+  getBounds() {
+    // Estimate text dimensions
+    const width = this.text.length * this.fontSize * 0.6;
+    const height = this.fontSize * 1.2;
+    return { x: this.x, y: this.y - height + this.fontSize * 0.2, width, height };
+  }
+
+  isPointInside(x, y) {
+    const bounds = this.getBounds();
+    return x >= bounds.x && x <= bounds.x + bounds.width &&
+           y >= bounds.y && y <= bounds.y + bounds.height;
+  }
+
+  draw(ctx) {
+    ctx.font = `${this.fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+    ctx.fillStyle = this.color;
+    ctx.fillText(this.text, this.x, this.y);
+  }
+
+  move(deltaX, deltaY) {
+    this.x += deltaX;
+    this.y += deltaY;
+  }
+
+  resize(handle, deltaX, deltaY) {
+    // Text doesn't support resizing, only moving
+  }
+
+  getResizeHandles() {
+    // Return empty array - text can't be resized
+    return [];
+  }
+}
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const canvasWrapper = document.querySelector(".canvas-wrapper");
 const colorPicker = document.getElementById("color-picker");
-const sizeSlider = document.getElementById("size-slider");
-const sizeValue = document.getElementById("size-value");
 const cropOverlay = document.getElementById("crop-overlay");
 const cropSelection = document.getElementById("crop-selection");
 const instructions = document.getElementById("instructions");
@@ -69,7 +344,8 @@ async function init() {
     // Draw original image at full resolution
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-    // Save initial state
+    // Initialize empty annotations array and save initial state
+    state.annotations = [];
     saveHistory();
   };
   img.src = data.screenshot;
@@ -110,8 +386,11 @@ async function clearAnnotationData() {
 function saveHistory() {
   // Remove any redo history beyond current point
   state.history = state.history.slice(0, state.historyIndex + 1);
-  // Save current canvas state
-  state.history.push(canvas.toDataURL());
+  // Save current annotations state as JSON
+  const historyData = {
+    annotations: JSON.parse(JSON.stringify(state.annotations))
+  };
+  state.history.push(JSON.stringify(historyData));
   state.historyIndex = state.history.length - 1;
 
   // Limit history size
@@ -136,12 +415,68 @@ function redo() {
 }
 
 function loadHistoryState() {
-  const img = new Image();
-  img.onload = () => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0);
-  };
-  img.src = state.history[state.historyIndex];
+  const historyData = JSON.parse(state.history[state.historyIndex]);
+  
+  // Restore annotations from history
+  state.annotations = historyData.annotations.map(data => {
+    let annotation;
+    if (data.type === 'rect') {
+      annotation = new RectAnnotation(data.x, data.y, data.width, data.height, data.color, data.lineWidth);
+    } else if (data.type === 'arrow') {
+      annotation = new ArrowAnnotation(data.x, data.y, data.x2, data.y2, data.color, data.lineWidth);
+    } else if (data.type === 'drawing') {
+      annotation = new DrawingAnnotation(data.color, data.lineWidth);
+      annotation.strokes = data.strokes;
+      annotation.updateBounds();
+    } else if (data.type === 'text') {
+      annotation = new TextAnnotation(data.x, data.y, data.text, data.color, data.fontSize);
+    }
+    if (annotation) {
+      annotation.id = data.id;
+    }
+    return annotation;
+  }).filter(Boolean);
+  
+  clearSelection();
+  redrawCanvas();
+}
+
+function extractAnnotationsFromCanvas() {
+  // Clear selections when loading history state  
+  state.annotations = [];
+  clearSelection();
+}
+
+function redrawCanvas() {
+  if (!state.originalImage) return;
+  
+  // Clear and redraw original image
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(state.originalImage, 0, 0, canvas.width, canvas.height);
+  
+  // Draw all annotations
+  state.annotations.forEach(annotation => {
+    annotation.draw(ctx);
+  });
+  
+  // Draw selections
+  state.annotations.forEach(annotation => {
+    annotation.drawSelection(ctx);
+  });
+}
+
+function commitAnnotationToCanvas(annotation) {
+  // Draw the annotation permanently to the canvas
+  annotation.draw(ctx);
+  // Remove from interactive annotations array since it's now part of the canvas
+  const index = state.annotations.indexOf(annotation);
+  if (index > -1) {
+    state.annotations.splice(index, 1);
+  }
+  // Save the current state to history
+  saveHistory();
+  // Clear selection
+  clearSelection();
 }
 
 // ── Toolbar Setup ────────────────────────────────────────────────────────────
@@ -168,18 +503,14 @@ function setupToolbar() {
     state.color = e.target.value;
   });
 
-  // Size slider
-  sizeSlider.addEventListener("input", (e) => {
-    state.lineWidth = parseInt(e.target.value);
-    sizeValue.textContent = state.lineWidth;
-  });
-
   // Undo/Redo buttons
   document.getElementById("btn-undo").addEventListener("click", undo);
   document.getElementById("btn-redo").addEventListener("click", redo);
 
   // Clear button
   document.getElementById("btn-clear").addEventListener("click", () => {
+    // Clear all annotations and reset to original image
+    state.annotations = [];
     if (state.originalImage) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(state.originalImage, 0, 0, canvas.width, canvas.height);
@@ -197,16 +528,75 @@ function setupToolbar() {
   });
 }
 
+// ── Annotation Management ───────────────────────────────────────────────────
+function clearSelection() {
+  state.annotations.forEach(annotation => annotation.selected = false);
+  state.selectedAnnotation = null;
+  state.resizeHandle = null;
+  updateInstructions();
+  updateCursor();
+}
+
+function selectAnnotation(annotation) {
+  clearSelection();
+  annotation.selected = true;
+  state.selectedAnnotation = annotation;
+  updateInstructions();
+  redrawCanvas();
+}
+
+function getAnnotationAt(x, y) {
+  // Check from top to bottom (reverse order)
+  for (let i = state.annotations.length - 1; i >= 0; i--) {
+    const annotation = state.annotations[i];
+    if (annotation.isPointInside(x, y)) {
+      return annotation;
+    }
+  }
+  return null;
+}
+
+function updateCursor() {
+  if (state.resizeHandle) {
+    const cursors = {
+      'nw': 'nw-resize',
+      'ne': 'ne-resize', 
+      'sw': 'sw-resize',
+      'se': 'se-resize'
+    };
+    canvas.style.cursor = cursors[state.resizeHandle.type] || 'default';
+  } else if (state.selectedAnnotation && !state.isDrawing) {
+    canvas.style.cursor = 'move';
+  } else if (state.currentTool === 'text') {
+    canvas.style.cursor = 'text';
+  } else {
+    canvas.style.cursor = 'crosshair';
+  }
+}
+
 function updateInstructions() {
   const toolInstructions = {
     draw: "Click and drag to draw freehand lines",
-    arrow: "Click and drag to draw an arrow",
-    rect: "Click and drag to draw a rectangle",
+    line: "Click and drag to draw a straight line",
+    arrow: "Click and drag to draw an arrow. Click arrows to select, move, or resize them.",
+    rect: "Click and drag to draw a rectangle. Click rectangles to select, move, or resize them.",
+    circle: "Click and drag to draw a circle",
     highlight: "Click and drag to highlight an area (semi-transparent)",
-    text: "Click to place text, then type your text",
+    blur: "Click and drag to blur/pixelate an area for privacy",
+    text: "Click to place text, then type your text. Click text to select and drag to move.",
     crop: "Click and drag to select area to crop"
   };
-  instructions.textContent = toolInstructions[state.currentTool] || "";
+  
+  let instruction = toolInstructions[state.currentTool] || "";
+  if (state.selectedAnnotation) {
+    if (state.selectedAnnotation.type === 'text') {
+      instruction += " • Press Enter to commit • Delete to remove • Drag to move";
+    } else {
+      instruction += " • Press Enter to commit • Delete to remove • Drag to move • Drag corners to resize";
+    }
+  }
+  
+  instructions.textContent = instruction;
 }
 
 // ── Canvas Setup ─────────────────────────────────────────────────────────────
@@ -250,13 +640,60 @@ function getCanvasCoords(e) {
 
 function handleMouseDown(e) {
   const coords = getCanvasCoords(e);
+  
+  // Check if clicking on a resize handle first
+  if (state.selectedAnnotation) {
+    const handle = state.selectedAnnotation.getResizeHandleAt(coords.x, coords.y);
+    if (handle) {
+      state.resizeHandle = handle;
+      state.isDrawing = true;
+      state.startX = coords.x;
+      state.startY = coords.y;
+      return;
+    }
+  }
+  
+  // Check if clicking on an existing annotation
+  const clickedAnnotation = getAnnotationAt(coords.x, coords.y);
+  
+  if (clickedAnnotation) {
+    // Select and prepare for dragging existing annotation
+    selectAnnotation(clickedAnnotation);
+    state.isDragging = true;
+    state.dragOffset = {
+      x: coords.x - (clickedAnnotation.type === 'text' ? clickedAnnotation.x : clickedAnnotation.x),
+      y: coords.y - (clickedAnnotation.type === 'text' ? clickedAnnotation.y : clickedAnnotation.y)
+    };
+    return;
+  }
+  
+  // Clear selection if not clicking on annotation
+  if (state.selectedAnnotation) {
+    clearSelection();
+    redrawCanvas();
+  }
+  
+  // Only start drawing new shapes with specific tools
+  if (state.currentTool !== 'draw' && state.currentTool !== 'highlight' && 
+      state.currentTool !== 'rect' && state.currentTool !== 'arrow' && 
+      state.currentTool !== 'text') {
+    return;
+  }
+
   state.isDrawing = true;
   state.startX = coords.x;
   state.startY = coords.y;
 
   if (state.currentTool === "draw" || state.currentTool === "highlight") {
-    ctx.beginPath();
-    ctx.moveTo(coords.x, coords.y);
+    // Start new drawing annotation
+    const highlightLineWidth = state.currentTool === "highlight" ? Math.max(8, state.lineWidth * 3) : state.lineWidth;
+    const drawingAnnotation = new DrawingAnnotation(
+      state.currentTool === "highlight" ? state.color + "60" : state.color,
+      highlightLineWidth
+    );
+    drawingAnnotation.addPoint(coords.x, coords.y);
+    state.annotations.push(drawingAnnotation);
+    state.currentStroke = drawingAnnotation;
   }
 
   if (state.currentTool === "text") {
@@ -271,9 +708,8 @@ function handleMouseDown(e) {
     const displayScale = state.displayScale || 1;
     input.style.position = "absolute";
     input.style.left = (coords.x / (canvas.width / canvas.getBoundingClientRect().width)) + "px";
-    input.style.top = ((coords.y - state.lineWidth * 4) / (canvas.height / canvas.getBoundingClientRect().height)) + "px";
-    const fontSize = state.lineWidth * 4;
-    input.style.font = `${fontSize * displayScale}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+    input.style.top = ((coords.y - state.fontSize) / (canvas.height / canvas.getBoundingClientRect().height)) + "px";
+    input.style.font = `${state.fontSize * displayScale}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
     input.style.color = state.color;
     input.style.background = "rgba(0,0,0,0.8)";
     input.style.border = "2px solid " + state.color;
@@ -291,9 +727,11 @@ function handleMouseDown(e) {
       input._committed = true;
       const text = input.value.trim();
       if (text) {
-        ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-        ctx.fillStyle = state.color;
-        ctx.fillText(text, coords.x, coords.y);
+        // Create text annotation instead of drawing directly to canvas
+        const textAnnotation = new TextAnnotation(coords.x, coords.y, text, state.color, state.fontSize);
+        state.annotations.push(textAnnotation);
+        selectAnnotation(textAnnotation);
+        redrawCanvas();
         saveHistory();
       }
       input.remove();
@@ -318,79 +756,117 @@ function handleMouseDown(e) {
 }
 
 function handleMouseMove(e) {
+  const coords = getCanvasCoords(e);
+  
+  if (!state.isDrawing && !state.isDragging) {
+    // Update cursor based on what's under mouse
+    if (state.selectedAnnotation) {
+      const handle = state.selectedAnnotation.getResizeHandleAt(coords.x, coords.y);
+      if (handle) {
+        state.resizeHandle = handle;
+        updateCursor();
+        return;
+      } else {
+        state.resizeHandle = null;
+      }
+    }
+    
+    const annotation = getAnnotationAt(coords.x, coords.y);
+    if (annotation) {
+      canvas.style.cursor = 'pointer';
+    } else {
+      updateCursor();
+    }
+    return;
+  }
+
+  if (state.resizeHandle && state.selectedAnnotation) {
+    // Handle resizing
+    const deltaX = coords.x - state.startX;
+    const deltaY = coords.y - state.startY;
+    state.selectedAnnotation.resize(state.resizeHandle, deltaX, deltaY);
+    state.startX = coords.x;
+    state.startY = coords.y;
+    redrawCanvas();
+    return;
+  }
+
+  if (state.isDragging && state.selectedAnnotation) {
+    // Handle dragging
+    const newX = coords.x - state.dragOffset.x;
+    const newY = coords.y - state.dragOffset.y;
+    
+    if (state.selectedAnnotation.type === 'drawing') {
+      const deltaX = newX - state.selectedAnnotation.getBounds().x;
+      const deltaY = newY - state.selectedAnnotation.getBounds().y;
+      state.selectedAnnotation.move(deltaX, deltaY);
+    } else if (state.selectedAnnotation.type === 'text') {
+      state.selectedAnnotation.x = newX;
+      state.selectedAnnotation.y = newY;
+    } else {
+      state.selectedAnnotation.x = newX;
+      state.selectedAnnotation.y = newY;
+    }
+    redrawCanvas();
+    return;
+  }
+
   if (!state.isDrawing) return;
 
-  const coords = getCanvasCoords(e);
-
-  if (state.currentTool === "draw") {
-    ctx.lineTo(coords.x, coords.y);
-    ctx.strokeStyle = state.color;
-    ctx.lineWidth = state.lineWidth;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.stroke();
-  } else if (state.currentTool === "highlight") {
-    ctx.lineTo(coords.x, coords.y);
-    ctx.strokeStyle = state.color + "60"; // Semi-transparent
-    ctx.lineWidth = state.lineWidth * 5;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.stroke();
+  if (state.currentTool === "draw" || state.currentTool === "highlight") {
+    if (state.currentStroke) {
+      state.currentStroke.addPoint(coords.x, coords.y);
+      redrawCanvas();
+    }
   }
 }
 
 function handleMouseUp(e) {
+  if (state.isDragging) {
+    state.isDragging = false;
+    redrawCanvas(); // Update the visual state
+    saveHistory(); // Save after moving annotation
+    return;
+  }
+
+  if (state.resizeHandle) {
+    state.resizeHandle = null;
+    redrawCanvas(); // Update the visual state
+    saveHistory(); // Save after resizing annotation
+    updateCursor();
+    return;
+  }
+
   if (!state.isDrawing) return;
   state.isDrawing = false;
 
   const coords = getCanvasCoords(e);
 
   if (state.currentTool === "rect") {
-    ctx.strokeStyle = state.color;
-    ctx.lineWidth = state.lineWidth;
-    ctx.strokeRect(
-      state.startX,
-      state.startY,
-      coords.x - state.startX,
-      coords.y - state.startY
-    );
-    saveHistory();
+    const width = coords.x - state.startX;
+    const height = coords.y - state.startY;
+    if (Math.abs(width) > 5 || Math.abs(height) > 5) {
+      const rectAnnotation = new RectAnnotation(state.startX, state.startY, width, height, state.color, state.lineWidth);
+      state.annotations.push(rectAnnotation);
+      selectAnnotation(rectAnnotation);
+      redrawCanvas();
+      saveHistory();
+    }
   } else if (state.currentTool === "arrow") {
-    drawArrow(state.startX, state.startY, coords.x, coords.y);
+    const arrowAnnotation = new ArrowAnnotation(state.startX, state.startY, coords.x, coords.y, state.color, state.lineWidth);
+    state.annotations.push(arrowAnnotation);
+    selectAnnotation(arrowAnnotation);
+    redrawCanvas();
     saveHistory();
   } else if (state.currentTool === "draw" || state.currentTool === "highlight") {
-    saveHistory();
+    if (state.currentStroke && state.currentStroke.strokes.length > 1) {
+      // Commit drawing immediately to canvas since it can't be edited
+      commitAnnotationToCanvas(state.currentStroke);
+    }
+    state.currentStroke = null;
   }
-}
 
-function drawArrow(fromX, fromY, toX, toY) {
-  const headLength = state.lineWidth * 4;
-  const angle = Math.atan2(toY - fromY, toX - fromX);
-
-  ctx.strokeStyle = state.color;
-  ctx.fillStyle = state.color;
-  ctx.lineWidth = state.lineWidth;
-  ctx.lineCap = "round";
-
-  // Line
-  ctx.beginPath();
-  ctx.moveTo(fromX, fromY);
-  ctx.lineTo(toX, toY);
-  ctx.stroke();
-
-  // Arrowhead
-  ctx.beginPath();
-  ctx.moveTo(toX, toY);
-  ctx.lineTo(
-    toX - headLength * Math.cos(angle - Math.PI / 6),
-    toY - headLength * Math.sin(angle - Math.PI / 6)
-  );
-  ctx.lineTo(
-    toX - headLength * Math.cos(angle + Math.PI / 6),
-    toY - headLength * Math.sin(angle + Math.PI / 6)
-  );
-  ctx.closePath();
-  ctx.fill();
+  updateCursor();
 }
 
 // ── Crop Handling ────────────────────────────────────────────────────────────
@@ -487,6 +963,8 @@ function handleCropEnd(e) {
 // ── Keyboard Shortcuts ───────────────────────────────────────────────────────
 function setupKeyboard() {
   document.addEventListener("keydown", (e) => {
+    if (isTextInputActive()) return;
+
     // Ctrl+Z or Cmd+Z for undo
     if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
       e.preventDefault();
@@ -497,11 +975,32 @@ function setupKeyboard() {
       e.preventDefault();
       redo();
     }
-    // Escape to discard
-    if (e.key === "Escape" && !isTextInputActive()) {
-      clearAnnotationData().then(() => window.close());
+    // Delete or Backspace to remove selected annotation
+    if ((e.key === "Delete" || e.key === "Backspace") && state.selectedAnnotation) {
+      e.preventDefault();
+      const index = state.annotations.indexOf(state.selectedAnnotation);
+      if (index > -1) {
+        state.annotations.splice(index, 1);
+        clearSelection();
+        redrawCanvas();
+        saveHistory();
+      }
     }
-    // Enter to save
+    // Enter to commit selected annotation to canvas
+    if (e.key === "Enter" && state.selectedAnnotation) {
+      e.preventDefault();
+      commitAnnotationToCanvas(state.selectedAnnotation);
+    }
+    // Escape to clear selection or discard
+    if (e.key === "Escape") {
+      if (state.selectedAnnotation) {
+        clearSelection();
+        redrawCanvas();
+      } else {
+        clearAnnotationData().then(() => window.close());
+      }
+    }
+    // Ctrl/Cmd+Enter to save
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       saveAndClose();
     }
@@ -510,6 +1009,10 @@ function setupKeyboard() {
 
 // ── Save and Close ───────────────────────────────────────────────────────────
 async function saveAndClose() {
+  // Clear selection before saving
+  clearSelection();
+  redrawCanvas();
+  
   const dataUrl = canvas.toDataURL("image/png");
 
   // Get return tab ID before updating storage

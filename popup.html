@@ -429,7 +429,8 @@
       flex: 1;
       width: 100%;
       min-height: 36px;
-      max-height: 80px;
+      max-height: 120px;
+      height: 60px;
       padding: 8px 28px 8px 10px;
       background: var(--surface2);
       border: 1px solid var(--border);
@@ -441,6 +442,8 @@
       transition: border-color 0.2s;
       outline: none;
       line-height: 1.5;
+      overflow-y: auto;
+      word-wrap: break-word;
     }
     .note-input:focus { border-color: var(--accent); }
     .note-input::placeholder { color: var(--muted); }
@@ -1154,7 +1157,6 @@
           id="note-input"
           placeholder="Describe what you were doing, what broke, what you expected… (or record voice)"
           rows="2"
-          style="overflow: hidden; resize: none;"
         ></textarea>
         <button class="btn-clear-input" id="btn-clear-note" title="Clear text">✕</button>
       </div>
@@ -1238,12 +1240,26 @@
       <div id="result-screenshots-grid" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
     </div>
 
-    <!-- Video download in result panel -->
+    <!-- Video playback in result panel -->
     <div id="result-video" style="display:none; margin-top: 10px;">
       <div class="section-label" style="margin-bottom: 6px;">Video Recording</div>
-      <button class="btn-sm" id="btn-result-download-video" style="width: 100%;">
-        <span>⬇</span> Download Video (attach to ticket)
-      </button>
+      <div id="result-video-preview" style="margin-bottom: 8px;">
+        <video id="result-video-player" controls style="width: 100%; max-height: 200px; border-radius: 4px; background: #000;">
+          Your browser does not support the video tag.
+        </video>
+      </div>
+      
+      <!-- Video Trimming Section in Result Panel -->
+      <!-- Trimming functionality moved to recorder.js screen for better UX -->
+      
+      <div style="display: flex; gap: 6px; margin-top: 8px;">
+        <button class="btn-sm" id="btn-result-download-video" style="flex: 1;">
+          <span>⬇</span> Download
+        </button>
+        <button class="btn-sm" id="btn-result-delete-video" style="background: var(--surface2); color: var(--muted);">
+          <span>✕</span> Remove
+        </button>
+      </div>
     </div>
 
     <!-- Chat with AI Section -->
