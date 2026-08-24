@@ -432,11 +432,11 @@
       <div class="section-title">Summary (Title)</div>
       <div class="field">
         <label>Format / Prefix <span>optional</span></label>
-        <input type="text" id="summaryFormat" placeholder="e.g. [ComponentName]: Brief description" />
+        <input type="text" id="summaryFormat" placeholder="e.g. Component/Page – what's broken, when it happens" />
       </div>
       <div class="field">
         <label>Summary Guidelines <span>include/avoid rules</span></label>
-        <textarea id="summaryGuidelines" rows="4" placeholder="Include:&#10;- Component name&#10;- User impact&#10;&#10;Avoid:&#10;- Vague terms&#10;- Internal IDs"></textarea>
+        <textarea id="summaryGuidelines" rows="4" placeholder="Include:&#10;- Exact UI element (button, field, modal)&#10;- When/under what condition it happens&#10;&#10;Avoid:&#10;- Filler openers ('There is an issue where...')&#10;- Vague terms, internal IDs"></textarea>
       </div>
     </div>
 
@@ -444,11 +444,11 @@
       <div class="section-title">Description (Body)</div>
       <div class="field">
         <label>Description Guidelines <span>include/avoid rules</span></label>
-        <textarea id="descriptionGuidelines" rows="4" placeholder="Include:&#10;- UI element names&#10;- Error messages&#10;&#10;Avoid:&#10;- Root cause speculation&#10;- Duplicate info from summary"></textarea>
+        <textarea id="descriptionGuidelines" rows="4" placeholder="Include:&#10;- Numbered steps, imperative mood ('Click', 'Enter')&#10;- One user action per step&#10;- UI element names, error messages&#10;&#10;Avoid:&#10;- Root cause speculation&#10;- Duplicate info from summary"></textarea>
       </div>
       <div class="field">
         <label>Extra Instructions <span>freeform</span></label>
-        <textarea id="extraInstructions" rows="2" placeholder="e.g. Use bullet points for steps. Keep acceptance criteria testable."></textarea>
+        <textarea id="extraInstructions" rows="2" placeholder="e.g. Keep acceptance criteria testable. Priority reasoning should reference Impact, not repeat the bug."></textarea>
       </div>
     </div>
   </div>

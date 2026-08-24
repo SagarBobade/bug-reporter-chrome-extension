@@ -365,12 +365,14 @@ async function getAnnotationData() {
   });
 }
 
-async function saveAnnotationResult(dataUrl) {
+async function saveAnnotationResult(dataUrl, editIndex, fromResultPanel) {
   return new Promise((resolve) => {
     chrome.storage.local.set({
       [ANNOTATION_DATA_KEY]: {
         result: dataUrl,
-        completed: true
+        completed: true,
+        editIndex,
+        fromResultPanel
       }
     }, resolve);
   });
@@ -947,8 +949,29 @@ function handleCropEnd(e) {
     // Draw cropped image
     ctx.putImageData(imageData, 0, 0);
 
-    saveHistory();
-    showToast("Area cropped!");
+    // Rebuild the base image from the cropped pixels so future redraws
+    // (undo, new annotations, selection) use the cropped result instead of
+    // stretching the original full-size screenshot back into the new canvas size.
+    const croppedDataUrl = canvas.toDataURL("image/png");
+    const croppedImg = new Image();
+    croppedImg.onload = () => {
+      state.originalImage = croppedImg;
+
+      // Any uncommitted annotations were positioned relative to the old,
+      // uncropped canvas — their coordinates no longer make sense, so drop them.
+      state.annotations = [];
+      clearSelection();
+
+      // The crop is a new baseline: reset history so undo can't revert to a
+      // full-size image that no longer matches the (now smaller) canvas.
+      state.history = [];
+      state.historyIndex = -1;
+      saveHistory();
+
+      redrawCanvas();
+      showToast("Area cropped!");
+    };
+    croppedImg.src = croppedDataUrl;
   }
 
   // Reset crop state
@@ -1015,11 +1038,11 @@ async function saveAndClose() {
   
   const dataUrl = canvas.toDataURL("image/png");
 
-  // Get return tab ID before updating storage
+  // Get return tab ID and edit tracking info before updating storage
   const data = await getAnnotationData();
   const returnTabId = data?.returnTabId;
 
-  await saveAnnotationResult(dataUrl);
+  await saveAnnotationResult(dataUrl, data?.editIndex, data?.fromResultPanel);
   showToast("Saved! Returning to popup...");
 
   setTimeout(async () => {

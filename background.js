@@ -58,6 +58,26 @@ async function initializeDefaultSettings() {
 
 // ── Generation State Storage Key ─────────────────────────────────────────────
 const GENERATION_STATE_KEY = "bugReporterGenerationState";
+const USAGE_STATS_KEY = "bugReporterUsageStats";
+
+// ── Session usage tracking ────────────────────────────────────────────────────
+async function recordUsage(tokenUsage) {
+  if (!tokenUsage?.total) return;
+  return new Promise((resolve) => {
+    chrome.storage.local.get(USAGE_STATS_KEY, (r) => {
+      const stats = r[USAGE_STATS_KEY] || { totalTokens: 0, ticketCount: 0 };
+      stats.totalTokens += tokenUsage.total;
+      stats.ticketCount += 1;
+      chrome.storage.local.set({ [USAGE_STATS_KEY]: stats }, resolve);
+    });
+  });
+}
+
+async function getUsageStats() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(USAGE_STATS_KEY, (r) => resolve(r[USAGE_STATS_KEY] || { totalTokens: 0, ticketCount: 0 }));
+  });
+}
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
 async function getSettings() {
@@ -107,18 +127,18 @@ async function clearGenerationState() {
 
 // ── Section templates ─────────────────────────────────────────────────────────
 const SECTION_TEMPLATES = {
-  summary:     (ctx) => `## Summary\n[${ctx.summaryFormat || "ComponentName: what broke and where — one line"}]`,
+  summary:     (ctx) => `## Summary\n[${ctx.summaryFormat || "Component/Page – what's broken, when it happens. One line, no filler ('There is an issue where...'), name the exact UI element."}]`,
   environment: (ctx) => `## Environment
 - **Browser:** ${ctx.browserInfo || "Chrome"}
 - **OS:** ${ctx.osInfo || "Unknown"}
 - **Screen:** ${ctx.screenInfo || "Unknown"}
 - **Page:** ${ctx.pageTitle}
 - **URL:** ${ctx.pageUrl}`,
-  steps:       ()    => `## Steps to Reproduce\n1. \n2. \n3. `,
-  expected:    ()    => `## Expected Behavior\n[One sentence]`,
-  actual:      ()    => `## Actual Behavior\n[One sentence, reference UI elements visible in screenshots]`,
-  impact:      ()    => `## Impact\n[Who is affected and severity]`,
-  priority:    ()    => `## Priority\n[P1/P2/P3/P4 — one-line reason]`,
+  steps:       ()    => `## Steps to Reproduce\n1. [Starting state/page — assume browser is already open]\n2. [One user action, imperative mood: "Click...", "Enter...", "Navigate to..."]\n3. [Next single action — never combine two actions in one step]\n4. [Final action — the one that triggers the bug]`,
+  expected:    ()    => `## Expected Behavior\n[One sentence, same subject as Actual Behavior so the two are directly comparable]`,
+  actual:      ()    => `## Actual Behavior\n[One sentence, mirrors Expected Behavior's subject, reference the exact UI element visible in screenshots]`,
+  impact:      ()    => `## Impact\n[Who is affected (all users / specific role / specific browser) and how — no severity label here, that belongs in Priority]`,
+  priority:    ()    => `## Priority\n[P1/P2/P3/P4 — one-line reason grounded in the Impact above, not a restatement of the bug]`,
   acceptance:  ()    => `## Acceptance Criteria\n- [ ] \n- [ ] \n- [ ] `,
   logs:        ()    => `## Logs / Errors\n[Error messages or codes visible in screenshots, or "None visible"]`,
   screenshots: ()    => `## Screenshots\n[Attached above]`,
@@ -190,13 +210,16 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasS
   ];
 
   const screenshotInstruction = hasScreenshots
-    ? `\nAnalyze the screenshots carefully. Use present tense. No markdown code blocks in output.`
-    : `\nUse the provided notes/context to understand the bug. Use present tense. No markdown code blocks in output.`;
+    ? `\nAnalyze the screenshots carefully. No markdown code blocks in output.`
+    : `\nUse the provided notes/context to understand the bug. No markdown code blocks in output.`;
 
   const systemPrompt = [
-    `You are a QA engineer writing a bug report. Be CONCISE and MINIMAL.`,
+    `You are a senior QA engineer writing a bug report following standard bug-tracking conventions (Jira/Linear style). Be CONCISE and MINIMAL.`,
     `Each section should be 1-3 lines maximum unless more is truly needed.`,
-    `No filler words, no padding, no repetition between sections.`,
+    `No filler words ("There is an issue where...", "It seems that...", "The user is unable to..."), no padding, no repetition between sections — state each fact once, in the section it belongs to.`,
+    `Steps to Reproduce: numbered, imperative mood ("Click", "Enter", "Navigate to" — never "The user clicks"), exactly one user action per step, starting from a known state, ending on the step that triggers the bug.`,
+    `Summary and Actual Behavior must name the exact UI element (button, field, modal, label) visible in the screenshots — never a vague description like "something is broken".`,
+    `Use consistent present tense throughout every section.`,
     domainContext ? `\nPRODUCT CONTEXT: ${domainContext}` : "",
     techStack     ? `TECH STACK: ${techStack}` : "",
     screenshotInstruction,
@@ -223,7 +246,7 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasS
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Gemini API ────────────────────────────────────────────────────────────────
-async function callGemini({ apiKey, systemPrompt, userPrompt, screenshots }) {
+async function callGemini({ apiKey, systemPrompt, userPrompt, screenshots, signal }) {
   const contentParts = [{ text: systemPrompt }];
 
   if (screenshots && screenshots.length > 0) {
@@ -248,7 +271,8 @@ async function callGemini({ apiKey, systemPrompt, userPrompt, screenshots }) {
       body: JSON.stringify({
         contents: [{ role: "user", parts: contentParts }],
         generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
-      })
+      }),
+      signal
     }
   );
 
@@ -268,7 +292,7 @@ async function callGemini({ apiKey, systemPrompt, userPrompt, screenshots }) {
 }
 
 // ── OpenAI API ────────────────────────────────────────────────────────────────
-async function callOpenAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
+async function callOpenAI({ apiKey, systemPrompt, userPrompt, screenshots, signal }) {
   const messages = [
     { role: "system", content: systemPrompt }
   ];
@@ -301,7 +325,8 @@ async function callOpenAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
       messages: messages,
       max_tokens: 2048,
       temperature: 0.2
-    })
+    }),
+    signal
   });
 
   if (!response.ok) {
@@ -320,7 +345,7 @@ async function callOpenAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
 }
 
 // ── Anthropic API ─────────────────────────────────────────────────────────────
-async function callAnthropic({ apiKey, systemPrompt, userPrompt, screenshots }) {
+async function callAnthropic({ apiKey, systemPrompt, userPrompt, screenshots, signal }) {
   const content = [];
 
   if (screenshots && screenshots.length > 0) {
@@ -352,7 +377,8 @@ async function callAnthropic({ apiKey, systemPrompt, userPrompt, screenshots }) 
       max_tokens: 2048,
       system: systemPrompt,
       messages: [{ role: "user", content: content }]
-    })
+    }),
+    signal
   });
 
   if (!response.ok) {
@@ -371,7 +397,7 @@ async function callAnthropic({ apiKey, systemPrompt, userPrompt, screenshots }) 
 }
 
 // ── xAI Grok API ──────────────────────────────────────────────────────────────
-async function callXAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
+async function callXAI({ apiKey, systemPrompt, userPrompt, screenshots, signal }) {
   const messages = [
     { role: "system", content: systemPrompt }
   ];
@@ -404,7 +430,8 @@ async function callXAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
       messages: messages,
       max_tokens: 2048,
       temperature: 0.2
-    })
+    }),
+    signal
   });
 
   if (!response.ok) {
@@ -423,7 +450,7 @@ async function callXAI({ apiKey, systemPrompt, userPrompt, screenshots }) {
 }
 
 // ── Universal AI Call ─────────────────────────────────────────────────────────
-async function callAI({ provider, apiKey, systemPrompt, userPrompt, screenshots }) {
+async function callAI({ provider, apiKey, systemPrompt, userPrompt, screenshots, signal }) {
   const providers = {
     gemini: callGemini,
     openai: callOpenAI,
@@ -434,11 +461,24 @@ async function callAI({ provider, apiKey, systemPrompt, userPrompt, screenshots 
   const callFn = providers[provider];
   if (!callFn) throw new Error(`Unknown AI provider: ${provider}`);
 
-  return await callFn({ apiKey, systemPrompt, userPrompt, screenshots });
+  return await callFn({ apiKey, systemPrompt, userPrompt, screenshots, signal });
+}
+
+// ── Generation cancellation ───────────────────────────────────────────────────
+const activeGenerationControllers = new Map(); // generationId -> AbortController
+
+function cancelGeneration(generationId) {
+  const controller = activeGenerationControllers.get(generationId);
+  if (controller) {
+    controller.abort();
+    activeGenerationControllers.delete(generationId);
+    return true;
+  }
+  return false;
 }
 
 // ── Generate Ticket ───────────────────────────────────────────────────────────
-async function generateTicket({ screenshots, audioNote, pageUrl, pageTitle, screenInfo }) {
+async function generateTicket({ screenshots, audioNote, pageUrl, pageTitle, screenInfo, signal }) {
   const { provider, key, settings } = await getCurrentProviderAndKey();
 
   const hasScreenshots = screenshots && screenshots.length > 0;
@@ -449,7 +489,8 @@ async function generateTicket({ screenshots, audioNote, pageUrl, pageTitle, scre
     apiKey: key,
     systemPrompt,
     userPrompt,
-    screenshots: hasScreenshots ? screenshots : []
+    screenshots: hasScreenshots ? screenshots : [],
+    signal
   });
 
   let text = result?.text || result; // Handle both new {text, tokenUsage} and legacy string format
@@ -633,6 +674,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "GENERATE_TICKET") {
     const { screenshots, audioNote, pageUrl, pageTitle, screenInfo } = msg.payload;
     const generationId = Date.now().toString();
+    const controller = new AbortController();
+    activeGenerationControllers.set(generationId, controller);
 
     setGenerationState({
       isGenerating: true,
@@ -640,10 +683,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       startTime: Date.now(),
       payload: msg.payload
     }).then(() => {
-      generateTicket({ screenshots, audioNote, pageUrl, pageTitle, screenInfo })
+      generateTicket({ screenshots, audioNote, pageUrl, pageTitle, screenInfo, signal: controller.signal })
         .then(async (result) => {
+          activeGenerationControllers.delete(generationId);
           const ticket = result?.text || result;
           const tokenUsage = result?.tokenUsage || null;
+          await recordUsage(tokenUsage);
           await setGenerationState({
             isGenerating: false,
             generationId,
@@ -657,20 +702,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           } catch (e) { /* popup closed */ }
         })
         .catch(async (err) => {
+          activeGenerationControllers.delete(generationId);
+          const wasCancelled = err.name === "AbortError";
           await setGenerationState({
             isGenerating: false,
             generationId,
             completedAt: Date.now(),
             ticket: null,
-            error: err.message
+            error: wasCancelled ? null : err.message,
+            cancelled: wasCancelled
           });
           try {
-            chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, error: err.message });
+            chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, error: wasCancelled ? null : err.message, cancelled: wasCancelled });
           } catch (e) { /* popup closed */ }
         });
     });
 
     sendResponse({ ok: true, generationId, generating: true });
+    return true;
+  }
+
+  if (msg.type === "CANCEL_GENERATION") {
+    const cancelled = cancelGeneration(msg.generationId);
+    clearGenerationState().then(() => sendResponse({ ok: cancelled }));
     return true;
   }
 
@@ -683,6 +737,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === "CLEAR_GENERATION_STATE") {
     clearGenerationState().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (msg.type === "GET_USAGE_STATS") {
+    getUsageStats().then(stats => sendResponse({ stats }));
     return true;
   }
 

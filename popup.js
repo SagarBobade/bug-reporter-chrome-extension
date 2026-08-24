@@ -74,7 +74,10 @@ const $ = id => document.getElementById(id);
 const authBadge      = $("auth-badge");
 const btnCapture     = $("btn-capture");
 const btnAnnotate    = $("btn-annotate");
+const btnUpload      = $("btn-upload");
+const uploadInput    = $("upload-input");
 const btnMic         = $("btn-mic");
+const micTimer       = $("mic-timer");
 const btnGenerate    = $("btn-generate");
 const btnCopy        = $("btn-copy");
 const btnRegen       = $("btn-regen");
@@ -87,6 +90,7 @@ const shotCount      = $("shot-count");
 const btnClearAll    = $("btn-clear-all");
 const loadingBar     = $("loading-bar");
 const loadingText    = $("loading-text");
+const btnCancelGenerate = $("btn-cancel-generate");
 const errorBox       = $("error-box");
 const capturePanel   = $("capture-panel");
 const resultPanel    = $("result-panel");
@@ -116,63 +120,60 @@ const btnResultDeleteVideo = $("btn-result-delete-video");
 
 const noteInputWrap    = $("note-input-wrap");
 const btnClearNote     = $("btn-clear-note");
-const tokenEstimate    = $("token-estimate");
 
 // ── Auto-resize textarea (for non-note textareas only) ──────────────────────
 function autoResizeTextarea(textarea) {
   // Skip auto-resize for note input - it now uses fixed height with scrollbar
   if (textarea.id === 'note-input') return;
-  
+
   textarea.style.height = "auto";
   textarea.style.height = textarea.scrollHeight + "px";
 }
 
-// ── Token Estimation ─────────────────────────────────────────────────────────
-function estimateTokens() {
-  // Base prompt: ~400 tokens (system prompt + section templates)
-  let tokens = 400;
-
-  // Screenshots: ~170 tokens per image (vision API overhead)
-  tokens += state.screenshots.length * 170;
-
-  // User notes: ~1.3 tokens per word
-  const noteWords = noteInput.value.trim().split(/\s+/).filter(Boolean).length;
-  tokens += Math.round(noteWords * 1.3);
-
-  // Output: ~500 tokens estimated for a typical bug report
-  tokens += 500;
-
-  return tokens;
+// Buckets are calibrated against this app's typical range: a single-screenshot
+// ticket with a short note lands well under 1,500 tokens; a full 6-screenshot
+// report with a long note can approach 3,000+.
+function getUsageLevel(total) {
+  if (total < 1200) return { level: "low", label: "Low" };
+  if (total < 2500) return { level: "medium", label: "Medium" };
+  return { level: "high", label: "High" };
 }
 
-function updateTokenEstimate() {
-  if (!tokenEstimate) return;
-  const hasScreenshots = state.screenshots.length > 0;
-  const hasNotes = noteInput.value.trim().length > 0;
-
-  if (hasScreenshots || hasNotes) {
-    const est = estimateTokens();
-    tokenEstimate.textContent = `Estimated API usage: ~${est.toLocaleString()} credits`;
-    tokenEstimate.style.display = "block";
-  } else {
-    tokenEstimate.style.display = "none";
-  }
+function formatCompact(n) {
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  return n.toString();
 }
 
-function showTokenUsage(tokenUsage) {
+async function getUsageStats() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "GET_USAGE_STATS" }, (response) => {
+      resolve(response?.stats || { totalTokens: 0, ticketCount: 0 });
+    });
+  });
+}
+
+async function showTokenUsage(tokenUsage) {
   const tokenUsageEl = $("token-usage");
-  if (!tokenUsageEl || !tokenUsage) return;
+  if (!tokenUsageEl || !tokenUsage || !tokenUsage.total) return;
 
-  const parts = [];
-  if (tokenUsage.total) {
-    parts.push(`Used ${tokenUsage.total.toLocaleString()} API credits`);
-    if (tokenUsage.input && tokenUsage.output) {
-      parts.push(`(${tokenUsage.input.toLocaleString()} sent + ${tokenUsage.output.toLocaleString()} received)`);
-    }
+  const { level, label } = getUsageLevel(tokenUsage.total);
+
+  const chips = [`<span class="usage-badge usage-${level}">${label}</span>`];
+  chips.push(`<span class="stat-chip">${formatCompact(tokenUsage.total)} total</span>`);
+  if (tokenUsage.input) chips.push(`<span class="stat-chip">↑${formatCompact(tokenUsage.input)}</span>`);
+  if (tokenUsage.output) chips.push(`<span class="stat-chip">↓${formatCompact(tokenUsage.output)}</span>`);
+
+  const rows = [`<div class="token-usage-row">${chips.join("")}</div>`];
+
+  const stats = await getUsageStats();
+  if (stats.ticketCount > 0) {
+    rows.push(
+      `<div class="token-usage-row"><span class="stat-chip">Session: ${formatCompact(stats.totalTokens)} / ${stats.ticketCount} ticket${stats.ticketCount === 1 ? "" : "s"}</span></div>`
+    );
   }
 
-  tokenUsageEl.textContent = parts.join(" ");
-  tokenUsageEl.style.display = "block";
+  tokenUsageEl.innerHTML = rows.join("");
+  tokenUsageEl.style.display = "flex";
 }
 
 // Persist session ───────────────────────────────────────────────────────────
@@ -352,6 +353,9 @@ function startGenerationPolling() {
           setLoading(false);
           showError("Generation failed: " + genState.error);
           chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
+        } else {
+          // No ticket, no error — generation was cancelled or state was cleared elsewhere.
+          setLoading(false);
         }
       }
     });
@@ -370,6 +374,8 @@ chrome.runtime.onMessage.addListener((msg) => {
       showResult(msg.ticket);
       if (msg.tokenUsage) showTokenUsage(msg.tokenUsage);
       showToast("Ticket generated!", "success");
+    } else if (msg.cancelled) {
+      // Cancellation already surfaced by the Cancel button handler — nothing more to show.
     } else if (msg.error) {
       showError("Generation failed: " + msg.error);
     }
@@ -523,6 +529,7 @@ async function checkMicState() {
         btnMic.classList.add("recording");
         btnMic.textContent = "⏹️";
         btnMic.title = "Stop recording";
+        startMicTimer();
       }
     });
   } catch (e) { /* ignore */ }
@@ -536,6 +543,10 @@ function setupSpeechRecognition() {
   // Listen for messages from content script
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "MIC_STATE") {
+      // Note: content.js auto-restarts recognition across silence gaps, so this
+      // message can toggle false→true rapidly even while the user is still
+      // "recording" from their perspective — the mic timer is driven by the
+      // button click instead, not by this message, so it stays continuous.
       state.isListening = msg.listening;
       if (msg.listening) {
         btnMic.classList.add("recording");
@@ -564,6 +575,7 @@ function setupSpeechRecognition() {
       state.isListening = false;
       btnMic.classList.remove("recording");
       btnMic.textContent = "🎙️";
+      stopMicTimer();
       if (msg.error === "not-allowed") {
         showError("Mic denied. Allow microphone access on this page and try again.");
       } else if (msg.error !== "aborted") {
@@ -600,12 +612,43 @@ function setupSpeechRecognition() {
         }
         if (!response?.success && messageType === "START_MIC") {
           showError(response?.error || "Failed to start recording.");
+          return;
+        }
+        if (messageType === "START_MIC") {
+          startMicTimer();
+        } else {
+          stopMicTimer();
         }
       });
     } catch (err) {
       showError("Failed to toggle mic: " + err.message);
     }
   });
+}
+
+// ── Mic recording timer ──────────────────────────────────────────────────────
+let micTimerInterval = null;
+let micTimerStart = null;
+
+function startMicTimer() {
+  if (micTimerInterval) return;
+  micTimerStart = Date.now();
+  micTimer.style.display = "block";
+  micTimer.textContent = "0:00";
+  micTimerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - micTimerStart) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    micTimer.textContent = `${mins}:${secs.toString().padStart(2, "0")}`;
+  }, 1000);
+}
+
+function stopMicTimer() {
+  if (micTimerInterval) {
+    clearInterval(micTimerInterval);
+    micTimerInterval = null;
+  }
+  micTimer.style.display = "none";
 }
 
 // ── Screenshot grid ───────────────────────────────────────────────────────────
@@ -836,6 +879,47 @@ btnAnnotate.addEventListener("click", async () => {
   }
 });
 
+// ── Upload Photo ─────────────────────────────────────────────────────────────
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+btnUpload.addEventListener("click", () => {
+  if (state.screenshots.length >= MAX_SCREENSHOTS) {
+    showError(`Max ${MAX_SCREENSHOTS} screenshots. Remove one first.`); return;
+  }
+  uploadInput.click();
+});
+
+uploadInput.addEventListener("change", async () => {
+  const files = Array.from(uploadInput.files || []);
+  uploadInput.value = ""; // allow re-selecting the same file later
+
+  const room = MAX_SCREENSHOTS - state.screenshots.length;
+  if (room <= 0) {
+    showError(`Max ${MAX_SCREENSHOTS} screenshots. Remove one first.`); return;
+  }
+  if (files.length > room) {
+    showError(`Only ${room} more screenshot(s) allowed — added the first ${room}.`);
+  }
+
+  for (const file of files.slice(0, room)) {
+    if (!file.type.startsWith("image/")) continue;
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      state.screenshots.push(dataUrl);
+    } catch (e) {
+      showError("Upload failed: " + e.message);
+    }
+  }
+  saveSession(); renderGrid(); updateGenerateBtn(); clearError();
+});
+
 // ── Video Recording ───────────────────────────────────────────────────────────
 const VIDEO_RECORDING_KEY = "bugReporterVideoRecording";
 
@@ -1031,7 +1115,6 @@ function updateGenerateBtn() {
   } else {
     btnGenerate.innerHTML = `<span>📝</span> Add screenshot or notes first`;
   }
-  updateTokenEstimate();
 }
 
 btnGenerate.addEventListener("click", async () => {
@@ -1040,6 +1123,9 @@ btnGenerate.addEventListener("click", async () => {
 
   if (!hasScreenshots && !hasNotes) return;
   setLoading(true); clearError();
+  loadingText.textContent = hasScreenshots
+    ? "Analyzing screenshots and generating the ticket…"
+    : "Generating the ticket…";
 
   const fullNote = [
     noteInput.value.trim(),
@@ -1064,7 +1150,6 @@ btnGenerate.addEventListener("click", async () => {
     if (res?.ok && res.generationId) {
       // Generation started in background - store ID and start polling
       state.currentGenerationId = res.generationId;
-      loadingText.textContent = "Gemini is analyzing screenshots…";
       startGenerationPolling();
     } else if (res?.ok && res.ticket) {
       // Direct response (legacy support)
@@ -1480,8 +1565,25 @@ function setLoading(on) {
   btnGenerate.disabled = on;
   loadingBar.classList.toggle("visible", on);
   loadingText.classList.toggle("visible", on);
-  btnGenerate.innerHTML = on ? `<span>⏳</span> Analyzing…` : `<span>✨</span> Generate Ticket`;
+  btnCancelGenerate.style.display = on ? "block" : "none";
+  btnGenerate.innerHTML = on ? `<span>⏳</span> Generating…` : `<span>✨</span> Generate Ticket`;
 }
+
+btnCancelGenerate.addEventListener("click", async () => {
+  if (!state.currentGenerationId) return;
+  btnCancelGenerate.disabled = true;
+  try {
+    await chrome.runtime.sendMessage({ type: "CANCEL_GENERATION", generationId: state.currentGenerationId });
+  } catch (e) { /* ignore */ }
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+  state.currentGenerationId = null;
+  setLoading(false);
+  btnCancelGenerate.disabled = false;
+  showToast("Ticket generation cancelled", "info");
+});
 function showError(msg) { errorBox.textContent = msg; errorBox.classList.add("visible"); }
 function clearError()   { errorBox.classList.remove("visible"); errorBox.textContent = ""; }
 

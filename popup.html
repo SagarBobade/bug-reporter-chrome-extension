@@ -297,6 +297,17 @@
       background: rgba(124, 58, 237, 0.12);
     }
 
+    .btn-capture.btn-upload {
+      margin-bottom: 14px;
+      border-color: var(--border);
+      color: var(--text-muted);
+    }
+    .btn-capture.btn-upload:hover {
+      border-color: var(--border-light);
+      color: var(--text);
+      background: var(--surface2);
+    }
+
     /* ── Video Recording Section ────────────────────────────── */
     .video-section {
       margin-bottom: 14px;
@@ -397,6 +408,22 @@
     .note-input-wrap {
       flex: 1;
       position: relative;
+    }
+
+    .mic-wrap {
+      position: relative;
+      flex-shrink: 0;
+    }
+    .mic-timer {
+      position: absolute;
+      top: 100%;
+      margin-top: 2px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 9px;
+      font-family: 'SF Mono', Monaco, monospace;
+      color: var(--danger);
+      white-space: nowrap;
     }
 
     .btn-mic {
@@ -563,6 +590,62 @@
       display: none;
     }
     .loading-text.visible { display: block; }
+
+    .token-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .token-usage-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .stat-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--muted);
+      background: var(--surface2);
+      white-space: nowrap;
+    }
+    .usage-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .usage-badge.usage-low    { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+    .usage-badge.usage-medium { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+    .usage-badge.usage-high   { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+
+    .btn-cancel-generate {
+      display: block;
+      margin: 8px auto 0;
+      padding: 4px 14px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--danger);
+      background: transparent;
+      border: 1px solid var(--danger);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .btn-cancel-generate:hover {
+      background: var(--danger);
+      color: #fff;
+    }
 
     /* ── Result panel ────────────────────────────────────── */
     #result-panel { display: none; }
@@ -852,17 +935,25 @@
 
     /* ── Reset link ──────────────────────────────────────── */
     .btn-reset {
-      background: none;
-      border: none;
-      color: var(--muted);
-      font-family: 'SF Mono', Monaco, monospace;
-      font-size: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      color: #fff;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 600;
       cursor: pointer;
-      text-decoration: underline;
-      padding: 0;
-      transition: color 0.2s;
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      transition: all 0.2s;
     }
-    .btn-reset:hover { color: var(--text); }
+    .btn-reset:hover {
+      background: #6366f1;
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.3);
+    }
 
     /* ── Footer ──────────────────────────────────────────── */
     .footer {
@@ -1131,6 +1222,13 @@
       <span class="shortcut">crop/mark</span>
     </button>
 
+    <button class="btn-capture btn-upload" id="btn-upload">
+      <span>🖼️</span>
+      Upload photo
+      <span class="shortcut">from file</span>
+    </button>
+    <input type="file" id="upload-input" accept="image/png,image/jpeg,image/webp" multiple style="display:none">
+
     <!-- Video Recording Section (visibility controlled by settings) -->
     <div id="video-section" class="video-section" style="display: none;">
       <button class="btn-capture btn-record" id="btn-record">
@@ -1152,7 +1250,10 @@
     <div class="section-label">Notes / Context</div>
 
     <div class="voice-row">
-      <button class="btn-mic" id="btn-mic" title="Record voice note">🎙️</button>
+      <div class="mic-wrap">
+        <button class="btn-mic" id="btn-mic" title="Record voice note">🎙️</button>
+        <span class="mic-timer" id="mic-timer" style="display:none;">0:00</span>
+      </div>
       <div class="note-input-wrap" id="note-input-wrap">
         <textarea
           class="note-input"
@@ -1184,10 +1285,9 @@
       <span>✨</span>
       Generate Ticket
     </button>
-    <div id="token-estimate" class="token-info" style="display:none;"></div>
-
     <div class="loading-bar" id="loading-bar"><div class="loading-bar-fill"></div></div>
-    <div class="loading-text" id="loading-text">Gemini is analyzing screenshots…</div>
+    <div class="loading-text" id="loading-text">Generating the ticket…</div>
+    <button class="btn-cancel-generate" id="btn-cancel-generate" style="display:none;">✕ Cancel</button>
     <div class="error-box" id="error-box"></div>
   </div>
 
