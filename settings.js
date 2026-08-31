@@ -83,6 +83,11 @@ async function init() {
   const enabledSections = s.enabledSections || DEFAULT_SECTIONS.filter(sec => sec.default).map(sec => sec.id);
   renderSectionsGrid(enabledSections);
 
+  // Output formatting (Markdown vs quotes for exact values) — defaults to on
+  const useMarkdownFormatting = s.useMarkdownFormatting !== false;
+  $("markdown-formatting-toggle").classList.toggle("checked", useMarkdownFormatting);
+  $("markdown-formatting-toggle").querySelector(".check-box").textContent = useMarkdownFormatting ? "✓" : "";
+
   // Field checkboxes
   const enabledFields = s.enabledFields || ["component", "severity"];
   renderFieldGrid(enabledFields);
@@ -218,6 +223,18 @@ function getEnabledSections() {
   return Array.from(document.querySelectorAll(".section-check.checked"))
     .map(el => el.dataset.id)
     .filter(Boolean);
+}
+
+// ── Output formatting toggle ─────────────────────────────────────────────────
+$("markdown-formatting-toggle").addEventListener("click", () => {
+  const el = $("markdown-formatting-toggle");
+  el.classList.toggle("checked");
+  el.querySelector(".check-box").textContent = el.classList.contains("checked") ? "✓" : "";
+  setDirty(true);
+});
+
+function getUseMarkdownFormatting() {
+  return $("markdown-formatting-toggle").classList.contains("checked");
 }
 
 // ── Field configuration ───────────────────────────────────────────────────────
@@ -368,6 +385,7 @@ $("btn-save").addEventListener("click", async () => {
     enabledSections:      getEnabledSections(),
     enabledFields:        getEnabledFields(),
     customSections,
+    useMarkdownFormatting: getUseMarkdownFormatting(),
     videoRecordingEnabled: isVideoRecordingEnabled(),
     webcamEnabled:        isWebcamEnabled(),
     webcamPosition:       $("webcamPosition") ? $("webcamPosition").value : "bottom-right",
@@ -416,6 +434,7 @@ $("btn-export").addEventListener("click", () => {
     enabledSections:      getEnabledSections(),
     enabledFields:        getEnabledFields(),
     customSections,
+    useMarkdownFormatting: getUseMarkdownFormatting(),
     videoRecordingEnabled: isVideoRecordingEnabled(),
     webcamEnabled:        isWebcamEnabled(),
     webcamPosition:       $("webcamPosition") ? $("webcamPosition").value : "bottom-right",
@@ -481,6 +500,11 @@ $("import-file").addEventListener("change", async (e) => {
     if (settings.customSections) {
       customSections = settings.customSections;
       renderCustomSections();
+    }
+
+    if (typeof settings.useMarkdownFormatting === "boolean") {
+      $("markdown-formatting-toggle").classList.toggle("checked", settings.useMarkdownFormatting);
+      $("markdown-formatting-toggle").querySelector(".check-box").textContent = settings.useMarkdownFormatting ? "✓" : "";
     }
 
     if (typeof settings.videoRecordingEnabled === "boolean") {

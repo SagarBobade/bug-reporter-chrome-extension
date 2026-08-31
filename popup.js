@@ -62,6 +62,7 @@ const state = {
   currentGenerationId: null, // Track ongoing generation
   chatHistory: [], // Chat history with AI
   videoBlobUrl: null, // Blob URL for video download (video NOT sent to AI)
+  videoExtension: "webm", // File extension matching the recorded video's actual codec
   videoRecordingEnabled: false, // Setting: whether video recording is enabled
   isTranscriptUpdate: false, // Flag to distinguish transcript vs user edits
 };
@@ -969,8 +970,9 @@ async function checkVideoRecording() {
         for (let i = 0; i < binaryStr.length; i++) {
           bytes[i] = binaryStr.charCodeAt(i);
         }
-        const blob = new Blob([bytes], { type: 'video/webm' });
+        const blob = new Blob([bytes], { type: data.videoMimeType || 'video/webm' });
         state.videoBlobUrl = URL.createObjectURL(blob);
+        state.videoExtension = data.videoExtension || 'webm';
 
         // Show video preview (video is NOT sent to AI - only for download)
         videoPreview.style.display = "block";
@@ -1037,7 +1039,7 @@ function downloadVideo() {
   // Create download link
   const a = document.createElement("a");
   a.href = state.videoBlobUrl;
-  a.download = `bug-recording-${Date.now()}.webm`;
+  a.download = `bug-recording-${Date.now()}.${state.videoExtension}`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1348,15 +1350,9 @@ btnCopy.addEventListener("click", async () => {
     let textContent = resultTextarea.value;
     
     // Add attachment instructions to text content if we have media
-    const hasAttachments = state.screenshots.length > 0 || state.videoBlobUrl;
-    if (hasAttachments) {
+    if (state.videoBlobUrl) {
       textContent += '\n\n--- ATTACHMENTS ---\n';
-      if (state.screenshots.length > 0) {
-        textContent += `📷 ${state.screenshots.length} screenshot${state.screenshots.length > 1 ? 's' : ''} (will be copied with this text)\n`;
-      }
-      if (state.videoBlobUrl) {
-        textContent += '🎬 1 screen recording (use download button below - cannot be pasted directly)\n';
-      }
+      textContent += '🎬 1 screen recording (use download button below - cannot be pasted directly)\n';
     }
     
     // Prepare clipboard items with multiple formats
@@ -1370,14 +1366,9 @@ btnCopy.addEventListener("click", async () => {
       .replace(/^## (.+)$/gm, '<h2>$1</h2>')
       .replace(/\n/g, '<br>');
     
-    if (hasAttachments) {
+    if (state.videoBlobUrl) {
       htmlContent += '<br><br><strong>Attachments:</strong><br>';
-      if (state.screenshots.length > 0) {
-        htmlContent += `📷 ${state.screenshots.length} screenshot${state.screenshots.length > 1 ? 's' : ''} (copied below)<br>`;
-      }
-      if (state.videoBlobUrl) {
-        htmlContent += '🎬 1 screen recording (download separately)<br>';
-      }
+      htmlContent += '🎬 1 screen recording (download separately)<br>';
     }
     
     clipboardItems['text/html'] = new Blob([htmlContent], { type: 'text/html' });
@@ -1430,14 +1421,9 @@ btnCopy.addEventListener("click", async () => {
     console.error('Clipboard copy failed:', err);
     // Fallback to plain text copy
     let fallbackText = resultTextarea.value;
-    if (state.screenshots.length > 0 || state.videoBlobUrl) {
+    if (state.videoBlobUrl) {
       fallbackText += '\n\n--- ATTACHMENTS ---\n';
-      if (state.screenshots.length > 0) {
-        fallbackText += `📷 ${state.screenshots.length} screenshot${state.screenshots.length > 1 ? 's' : ''} (click individual screenshots to copy)\n`;
-      }
-      if (state.videoBlobUrl) {
-        fallbackText += '🎬 1 screen recording (use download button)\n';
-      }
+      fallbackText += '🎬 1 screen recording (use download button)\n';
     }
     
     await navigator.clipboard.writeText(fallbackText);

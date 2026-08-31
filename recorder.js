@@ -15,6 +15,26 @@ let recognition = null;
 let transcript = "";
 let targetTabId = null;
 let isPaused = false;
+let recordingMimeType = "video/webm";
+let recordingExtension = "webm";
+
+// MP4 (H.264) MediaRecorder support varies by Chrome version/platform — prefer it when
+// available so recordings are directly usable without a separate conversion step, but
+// fall back to WebM (universally supported) rather than silently mislabeling the file.
+function pickRecordingMimeType() {
+  const candidates = [
+    { mimeType: "video/mp4;codecs=avc1", extension: "mp4" },
+    { mimeType: "video/mp4", extension: "mp4" },
+    { mimeType: "video/webm;codecs=vp9", extension: "webm" },
+    { mimeType: "video/webm", extension: "webm" }
+  ];
+  for (const candidate of candidates) {
+    if (window.MediaRecorder?.isTypeSupported?.(candidate.mimeType)) {
+      return candidate;
+    }
+  }
+  return { mimeType: "video/webm", extension: "webm" };
+}
 
 // DOM elements
 const preview = document.getElementById("preview");
@@ -126,8 +146,11 @@ async function init() {
     }
 
     // Start recording
+    const picked = pickRecordingMimeType();
+    recordingMimeType = picked.mimeType;
+    recordingExtension = picked.extension;
     mediaRecorder = new MediaRecorder(combinedStream, {
-      mimeType: 'video/webm;codecs=vp9'
+      mimeType: recordingMimeType
     });
 
     mediaRecorder.ondataavailable = (e) => {
@@ -593,8 +616,8 @@ function showCompletedState() {
   }
 
   // Create blob and show in preview
-  const blob = new Blob(recordedChunks, { type: 'video/webm' });
-  
+  const blob = new Blob(recordedChunks, { type: recordingMimeType });
+
   const url = URL.createObjectURL(blob);
   preview.srcObject = null;
   preview.src = url;
@@ -691,8 +714,8 @@ btnSave.addEventListener("click", async () => {
   btnSave.disabled = true;
   btnSave.innerHTML = "<span>⏳</span> Saving...";
 
-  let blob = new Blob(recordedChunks, { type: 'video/webm' });
-  
+  let blob = new Blob(recordedChunks, { type: recordingMimeType });
+
   // If trim metadata exists, create trimmed video
   if (window.trimMetadata) {
     btnSave.innerHTML = "<span>⏳</span> Creating trimmed video...";
@@ -702,7 +725,7 @@ btnSave.addEventListener("click", async () => {
     } catch (error) {
       console.error('Failed to create trimmed video, using original:', error);
       showToast('Trim creation failed, saving original video');
-      blob = new Blob(recordedChunks, { type: 'video/webm' });
+      blob = new Blob(recordedChunks, { type: recordingMimeType });
     }
   }
 
@@ -715,6 +738,8 @@ btnSave.addEventListener("click", async () => {
     completed: true,
     transcript: transcript || "",
     videoBlobBase64: videoBlobBase64,
+    videoMimeType: recordingMimeType,
+    videoExtension: recordingExtension,
     savedAt: Date.now()
   };
 
@@ -762,15 +787,15 @@ btnDownload.addEventListener("click", async () => {
   btnDownload.disabled = true;
   btnDownload.innerHTML = "<span>⏳</span> Preparing...";
   
-  let blob = new Blob(recordedChunks, { type: 'video/webm' });
-  let filename = `bug-recording-${Date.now()}.webm`;
-  
+  let blob = new Blob(recordedChunks, { type: recordingMimeType });
+  let filename = `bug-recording-${Date.now()}.${recordingExtension}`;
+
   // If trim metadata exists, create trimmed video
   if (window.trimMetadata) {
     btnDownload.innerHTML = "<span>⏳</span> Creating trimmed video...";
     try {
       blob = await createTrimmedVideoBlob();
-      filename = `bug-recording-trimmed-${Date.now()}.webm`;
+      filename = `bug-recording-trimmed-${Date.now()}.${recordingExtension}`;
       console.log('Created trimmed video for download:', blob.size, 'bytes');
     } catch (error) {
       console.error('Failed to create trimmed video, downloading original:', error);
@@ -1438,12 +1463,13 @@ async function createTrimmedVideoBlob() {
             finalStream = canvasStream;
           }
           
+          const trimMime = pickRecordingMimeType();
           const mediaRecorder = new MediaRecorder(finalStream, {
-            mimeType: 'video/webm',
+            mimeType: trimMime.mimeType,
             videoBitsPerSecond: 2500000,
             audioBitsPerSecond: 128000
           });
-          
+
           const chunks = [];
           mediaRecorder.ondataavailable = (e) => {
             if (e.data.size > 0) {
@@ -1451,9 +1477,9 @@ async function createTrimmedVideoBlob() {
               console.log('Chunk recorded:', e.data.size, 'bytes');
             }
           };
-          
+
           mediaRecorder.onstop = () => {
-            const trimmedBlob = new Blob(chunks, { type: 'video/webm' });
+            const trimmedBlob = new Blob(chunks, { type: trimMime.mimeType });
             console.log('Trimmed video created:', trimmedBlob.size, 'bytes');
             
             // Cleanup

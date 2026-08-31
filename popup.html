@@ -23,8 +23,19 @@
       --radius: 8px;
     }
 
+    /* Chrome sizes the popup window to the document's natural layout width, not just
+       the CSS `width` below — if any child wants more room than 380px (long unwrapped
+       text, an oversized image, etc.) the popup itself grows to fit it, which is what
+       causes the popup to look wider on some screens. Locking width/max-width on both
+       html and body, plus clamping media, keeps the popup a fixed 380px regardless. */
+    html {
+      width: 380px;
+      max-width: 380px;
+    }
+
     body {
       width: 380px;
+      max-width: 380px;
       min-height: 520px;
       background: var(--bg);
       color: var(--text);
@@ -32,6 +43,10 @@
       font-size: 14px;
       line-height: 1.5;
       overflow-x: hidden;
+    }
+
+    img, video, canvas {
+      max-width: 100%;
     }
 
     /* ── Header ───────────────────────────────────────────── */
@@ -895,7 +910,8 @@
       font-size: 10px;
       line-height: 1.5;
       display: none;
-      margin-top: 10px;
+      margin-top: 14px;
+      margin-bottom: 14px;
     }
     .error-box.visible { display: block; }
 
@@ -1265,6 +1281,8 @@
       </div>
     </div>
 
+    <div class="error-box" id="error-box"></div>
+
     <div class="context-row">
       <div class="field-group">
         <label>Component / Area</label>
@@ -1288,7 +1306,6 @@
     <div class="loading-bar" id="loading-bar"><div class="loading-bar-fill"></div></div>
     <div class="loading-text" id="loading-text">Generating the ticket…</div>
     <button class="btn-cancel-generate" id="btn-cancel-generate" style="display:none;">✕ Cancel</button>
-    <div class="error-box" id="error-box"></div>
   </div>
 
   <!-- Result panel -->

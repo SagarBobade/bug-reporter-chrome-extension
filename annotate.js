@@ -27,6 +27,17 @@ const state = {
   currentStroke: [], // For freehand drawing
 };
 
+// ── Geometry helpers ─────────────────────────────────────────────────────────
+function pointInTriangle(px, py, p1, p2, p3) {
+  const sign = (ax, ay, bx, by, cx, cy) => (ax - cx) * (by - cy) - (bx - cx) * (ay - cy);
+  const d1 = sign(px, py, p1.x, p1.y, p2.x, p2.y);
+  const d2 = sign(px, py, p2.x, p2.y, p3.x, p3.y);
+  const d3 = sign(px, py, p3.x, p3.y, p1.x, p1.y);
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNeg && hasPos);
+}
+
 // ── Annotation Classes ──────────────────────────────────────────────────────
 class Annotation {
   constructor(type, x, y, color, lineWidth) {
@@ -88,8 +99,16 @@ class Annotation {
   getResizeHandleAt(x, y) {
     if (!this.selected) return null;
     const handles = this.getResizeHandles();
+    // Tolerance is in canvas (full-resolution) coordinates, but the canvas is
+    // usually displayed scaled down to fit the viewport — a fixed pixel
+    // tolerance here would shrink to just 1-2 screen pixels on a large
+    // screenshot, making handles nearly impossible to actually click (a miss
+    // falls through to "start drawing a new shape" instead of resizing).
+    // Scale the tolerance so it's a consistent ~10 screen pixels regardless
+    // of the screenshot's resolution/zoom.
+    const tolerance = 10 / (state.displayScale || 1);
     for (let handle of handles) {
-      if (Math.abs(x - handle.x) <= 6 && Math.abs(y - handle.y) <= 6) {
+      if (Math.hypot(x - handle.x, y - handle.y) <= tolerance) {
         return handle;
       }
     }
@@ -156,22 +175,49 @@ class ArrowAnnotation extends Annotation {
     };
   }
 
-  draw(ctx) {
-    const headLength = Math.max(8, this.lineWidth * 3); // Ensure visible arrowhead
+  // Hit-test the actual line (within a tolerance) plus the visible arrowhead
+  // triangle — not the bounding box (clicking anywhere in the empty space
+  // around a diagonal arrow shouldn't select it), but also not JUST the thin
+  // shaft (the arrowhead is visually wide; a click anywhere on it should
+  // still count as "clicking the arrow", not fall through to drawing a new one).
+  isPointInside(x, y) {
+    const dx = this.x2 - this.x, dy = this.y2 - this.y;
+    const lengthSq = dx * dx + dy * dy;
+    let t = lengthSq === 0 ? 0 : ((x - this.x) * dx + (y - this.y) * dy) / lengthSq;
+    t = Math.max(0, Math.min(1, t));
+    const closestX = this.x + t * dx, closestY = this.y + t * dy;
+    const shaftDistance = Math.hypot(x - closestX, y - closestY);
+    const shaftTolerance = Math.max(10, this.lineWidth);
+    if (shaftDistance <= shaftTolerance) return true;
+
+    const headLength = Math.max(8, this.lineWidth * 3);
+    const angle = Math.atan2(dy, dx);
+    const headP1 = { x: this.x2, y: this.y2 };
+    const headP2 = {
+      x: this.x2 - headLength * Math.cos(angle - Math.PI / 6),
+      y: this.y2 - headLength * Math.sin(angle - Math.PI / 6)
+    };
+    const headP3 = {
+      x: this.x2 - headLength * Math.cos(angle + Math.PI / 6),
+      y: this.y2 - headLength * Math.sin(angle + Math.PI / 6)
+    };
+    return pointInTriangle(x, y, headP1, headP2, headP3);
+  }
+
+  drawPass(ctx, strokeStyle, fillStyle, lineWidth) {
+    const headLength = Math.max(8, lineWidth * 3);
     const angle = Math.atan2(this.y2 - this.y, this.x2 - this.x);
 
-    ctx.strokeStyle = this.color;
-    ctx.fillStyle = this.color;
-    ctx.lineWidth = this.lineWidth;
+    ctx.strokeStyle = strokeStyle;
+    ctx.fillStyle = fillStyle;
+    ctx.lineWidth = lineWidth;
     ctx.lineCap = "round";
 
-    // Line
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
     ctx.lineTo(this.x2, this.y2);
     ctx.stroke();
 
-    // Arrowhead
     ctx.beginPath();
     ctx.moveTo(this.x2, this.y2);
     ctx.lineTo(
@@ -186,11 +232,43 @@ class ArrowAnnotation extends Annotation {
     ctx.fill();
   }
 
+  draw(ctx) {
+    // Dark halo pass first so the arrow stays legible over any background
+    // color (light or dark screenshots), then the real colored arrow on top —
+    // the same trick tools like Skitch/CleanShot use.
+    this.drawPass(ctx, "rgba(0,0,0,0.35)", "rgba(0,0,0,0.35)", this.lineWidth + 4);
+    this.drawPass(ctx, this.color, this.color, this.lineWidth);
+  }
+
+  // Two draggable endpoints (start/end) instead of the generic 4-corner
+  // bounding-box handles — matches how Figma/PowerPoint let you drag either
+  // end of a line directly, and is far more intuitive than corner-resize
+  // semantics for a line shape.
+  getResizeHandles() {
+    return [
+      { x: this.x, y: this.y, type: 'start' },
+      { x: this.x2, y: this.y2, type: 'end' }
+    ];
+  }
+
+  drawSelection(ctx) {
+    if (!this.selected) return;
+    this.getResizeHandles().forEach(handle => {
+      ctx.beginPath();
+      ctx.arc(handle.x, handle.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = "#4f46e5";
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    });
+  }
+
   resize(handle, deltaX, deltaY) {
-    if (handle.type === 'se') {
+    if (handle.type === 'end') {
       this.x2 += deltaX;
       this.y2 += deltaY;
-    } else if (handle.type === 'nw') {
+    } else if (handle.type === 'start') {
       this.x += deltaX;
       this.y += deltaY;
     }
@@ -274,7 +352,15 @@ class TextAnnotation extends Annotation {
   }
 
   draw(ctx) {
+    if (this.editing) return; // being edited via the inline input overlay right now
     ctx.font = `${this.fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+    // Dark outline pass first so the text stays legible over any background —
+    // plain fillText alone can vanish against a similarly-colored screenshot area.
+    ctx.lineJoin = "round";
+    ctx.miterLimit = 2;
+    ctx.lineWidth = Math.max(3, this.fontSize * 0.08);
+    ctx.strokeStyle = "rgba(0,0,0,0.6)";
+    ctx.strokeText(this.text, this.x, this.y);
     ctx.fillStyle = this.color;
     ctx.fillText(this.text, this.x, this.y);
   }
@@ -284,13 +370,17 @@ class TextAnnotation extends Annotation {
     this.y += deltaY;
   }
 
+  // Single handle at the bottom-right scales font size on drag — lets you
+  // resize text after placing it instead of only being able to move it.
   resize(handle, deltaX, deltaY) {
-    // Text doesn't support resizing, only moving
+    if (handle.type === 'font') {
+      this.fontSize = Math.round(Math.max(12, Math.min(160, this.fontSize + deltaX * 0.5)));
+    }
   }
 
   getResizeHandles() {
-    // Return empty array - text can't be resized
-    return [];
+    const bounds = this.getBounds();
+    return [{ x: bounds.x + bounds.width, y: bounds.y + bounds.height, type: 'font' }];
   }
 }
 
@@ -302,6 +392,17 @@ const colorPicker = document.getElementById("color-picker");
 const cropOverlay = document.getElementById("crop-overlay");
 const cropSelection = document.getElementById("crop-selection");
 const instructions = document.getElementById("instructions");
+
+// ── Base layer ───────────────────────────────────────────────────────────────
+// Holds the "baked" pixels — the original screenshot plus every committed
+// annotation (freehand strokes, highlights, and any shape/text once committed).
+// redrawCanvas() always repaints from this layer, then draws the still-editable
+// (uncommitted) annotations on top. Keeping this as an offscreen canvas (rather
+// than reloading an Image via dataURL/onload) means every commit updates it
+// synchronously — no async race where a fast second stroke could start before
+// the previous one was baked in, which is what caused strokes to vanish.
+const baseCanvas = document.createElement("canvas");
+const baseCtx = baseCanvas.getContext("2d");
 
 // ── Initialize ───────────────────────────────────────────────────────────────
 async function init() {
@@ -341,8 +442,12 @@ async function init() {
     canvasWrapper.style.width = displayWidth + "px";
     canvasWrapper.style.height = displayHeight + "px";
 
-    // Draw original image at full resolution
+    // Draw original image at full resolution — both on the visible canvas and
+    // the base layer that redraws/history are built from.
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    baseCanvas.width = canvas.width;
+    baseCanvas.height = canvas.height;
+    baseCtx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
     // Initialize empty annotations array and save initial state
     state.annotations = [];
@@ -385,11 +490,16 @@ async function clearAnnotationData() {
 }
 
 // ── History (Undo/Redo) ──────────────────────────────────────────────────────
+// Each entry captures the full state needed to restore this exact point: the
+// baked pixel layer (as a dataURL), the canvas dimensions (these can change —
+// e.g. after a crop), and the still-editable vector annotations on top of it.
 function saveHistory() {
   // Remove any redo history beyond current point
   state.history = state.history.slice(0, state.historyIndex + 1);
-  // Save current annotations state as JSON
   const historyData = {
+    baseImage: baseCanvas.toDataURL("image/png"),
+    width: canvas.width,
+    height: canvas.height,
     annotations: JSON.parse(JSON.stringify(state.annotations))
   };
   state.history.push(JSON.stringify(historyData));
@@ -416,10 +526,7 @@ function redo() {
   }
 }
 
-function loadHistoryState() {
-  const historyData = JSON.parse(state.history[state.historyIndex]);
-  
-  // Restore annotations from history
+function restoreAnnotationsFromHistory(historyData) {
   state.annotations = historyData.annotations.map(data => {
     let annotation;
     if (data.type === 'rect') {
@@ -438,29 +545,49 @@ function loadHistoryState() {
     }
     return annotation;
   }).filter(Boolean);
-  
-  clearSelection();
-  redrawCanvas();
 }
 
-function extractAnnotationsFromCanvas() {
-  // Clear selections when loading history state  
-  state.annotations = [];
-  clearSelection();
+function loadHistoryState() {
+  const historyData = JSON.parse(state.history[state.historyIndex]);
+
+  const img = new Image();
+  img.onload = () => {
+    // Resize both layers to match this history entry (dimensions can differ
+    // across a crop) before repainting the base layer from it.
+    canvas.width = historyData.width;
+    canvas.height = historyData.height;
+    baseCanvas.width = historyData.width;
+    baseCanvas.height = historyData.height;
+    baseCtx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
+    baseCtx.drawImage(img, 0, 0);
+
+    const displayScale = state.displayScale || 1;
+    const displayWidth = Math.round(historyData.width * displayScale) + "px";
+    const displayHeight = Math.round(historyData.height * displayScale) + "px";
+    canvas.style.width = displayWidth;
+    canvas.style.height = displayHeight;
+    canvasWrapper.style.width = displayWidth;
+    canvasWrapper.style.height = displayHeight;
+
+    restoreAnnotationsFromHistory(historyData);
+    clearSelection();
+    redrawCanvas();
+  };
+  img.src = historyData.baseImage;
 }
 
 function redrawCanvas() {
-  if (!state.originalImage) return;
-  
-  // Clear and redraw original image
+  if (!baseCanvas.width) return;
+
+  // Clear and repaint from the baked layer
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(state.originalImage, 0, 0, canvas.width, canvas.height);
-  
-  // Draw all annotations
+  ctx.drawImage(baseCanvas, 0, 0);
+
+  // Draw all still-editable annotations
   state.annotations.forEach(annotation => {
     annotation.draw(ctx);
   });
-  
+
   // Draw selections
   state.annotations.forEach(annotation => {
     annotation.drawSelection(ctx);
@@ -468,8 +595,11 @@ function redrawCanvas() {
 }
 
 function commitAnnotationToCanvas(annotation) {
-  // Draw the annotation permanently to the canvas
+  // Draw the annotation permanently — onto both the visible canvas and the
+  // base layer, synchronously, so it's immediately part of every future
+  // redraw (no async reload race that could make it vanish).
   annotation.draw(ctx);
+  annotation.draw(baseCtx);
   // Remove from interactive annotations array since it's now part of the canvas
   const index = state.annotations.indexOf(annotation);
   if (index > -1) {
@@ -511,11 +641,27 @@ function setupToolbar() {
 
   // Clear button
   document.getElementById("btn-clear").addEventListener("click", () => {
-    // Clear all annotations and reset to original image
+    // Clear all annotations and reset to the true original screenshot —
+    // restoring its original dimensions too, in case a crop had shrunk the canvas.
     state.annotations = [];
+    clearSelection();
     if (state.originalImage) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(state.originalImage, 0, 0, canvas.width, canvas.height);
+      canvas.width = state.originalImage.width;
+      canvas.height = state.originalImage.height;
+      baseCanvas.width = state.originalImage.width;
+      baseCanvas.height = state.originalImage.height;
+
+      const displayScale = state.displayScale || 1;
+      const displayWidth = Math.round(canvas.width * displayScale) + "px";
+      const displayHeight = Math.round(canvas.height * displayScale) + "px";
+      canvas.style.width = displayWidth;
+      canvas.style.height = displayHeight;
+      canvasWrapper.style.width = displayWidth;
+      canvasWrapper.style.height = displayHeight;
+
+      baseCtx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
+      baseCtx.drawImage(state.originalImage, 0, 0, canvas.width, canvas.height);
+      redrawCanvas();
       saveHistory();
     }
   });
@@ -562,9 +708,12 @@ function updateCursor() {
   if (state.resizeHandle) {
     const cursors = {
       'nw': 'nw-resize',
-      'ne': 'ne-resize', 
+      'ne': 'ne-resize',
       'sw': 'sw-resize',
-      'se': 'se-resize'
+      'se': 'se-resize',
+      'start': 'crosshair',
+      'end': 'crosshair',
+      'font': 'nwse-resize'
     };
     canvas.style.cursor = cursors[state.resizeHandle.type] || 'default';
   } else if (state.selectedAnnotation && !state.isDrawing) {
@@ -580,19 +729,21 @@ function updateInstructions() {
   const toolInstructions = {
     draw: "Click and drag to draw freehand lines",
     line: "Click and drag to draw a straight line",
-    arrow: "Click and drag to draw an arrow. Click arrows to select, move, or resize them.",
+    arrow: "Click and drag to draw an arrow (hold Shift to snap to 45°). Click an arrow to select it, then drag either end to reposition it.",
     rect: "Click and drag to draw a rectangle. Click rectangles to select, move, or resize them.",
     circle: "Click and drag to draw a circle",
     highlight: "Click and drag to highlight an area (semi-transparent)",
     blur: "Click and drag to blur/pixelate an area for privacy",
-    text: "Click to place text, then type your text. Click text to select and drag to move.",
+    text: "Click to place text, then type your text. Double-click existing text to edit it. Drag the bottom-right handle to resize.",
     crop: "Click and drag to select area to crop"
   };
   
   let instruction = toolInstructions[state.currentTool] || "";
   if (state.selectedAnnotation) {
     if (state.selectedAnnotation.type === 'text') {
-      instruction += " • Press Enter to commit • Delete to remove • Drag to move";
+      instruction += " • Press Enter to commit • Delete to remove • Drag to move • Drag corner to resize • Double-click to edit text";
+    } else if (state.selectedAnnotation.type === 'arrow') {
+      instruction += " • Press Enter to commit • Delete to remove • Drag to move • Drag either end to reposition it";
     } else {
       instruction += " • Press Enter to commit • Delete to remove • Drag to move • Drag corners to resize";
     }
@@ -622,6 +773,15 @@ function setupCanvas() {
   canvas.addEventListener("mouseleave", (e) => {
     if (isTextInputActive()) return;
     handleMouseUp(e);
+  });
+  canvas.addEventListener("dblclick", (e) => {
+    if (isTextInputActive()) return;
+    const coords = getCanvasCoords(e);
+    const annotation = getAnnotationAt(coords.x, coords.y);
+    if (annotation && annotation.type === "text") {
+      e.preventDefault();
+      openTextEditor({ x: annotation.x, y: annotation.y, existing: annotation });
+    }
   });
 
   // Crop overlay events
@@ -701,60 +861,86 @@ function handleMouseDown(e) {
   if (state.currentTool === "text") {
     e.preventDefault();
     e.stopPropagation();
-
-    // Create inline text input overlay
-    const input = document.createElement("input");
-    input.type = "text";
-    input.className = "annotation-text-input";
-    // Position in display (CSS) coordinates
-    const displayScale = state.displayScale || 1;
-    input.style.position = "absolute";
-    input.style.left = (coords.x / (canvas.width / canvas.getBoundingClientRect().width)) + "px";
-    input.style.top = ((coords.y - state.fontSize) / (canvas.height / canvas.getBoundingClientRect().height)) + "px";
-    input.style.font = `${state.fontSize * displayScale}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-    input.style.color = state.color;
-    input.style.background = "rgba(0,0,0,0.8)";
-    input.style.border = "2px solid " + state.color;
-    input.style.borderRadius = "4px";
-    input.style.padding = "4px 8px";
-    input.style.outline = "none";
-    input.style.zIndex = "1000";
-    input.style.minWidth = "200px";
-    
-    canvasWrapper.appendChild(input);
-    input.focus();
-    
-    const commitText = () => {
-      if (input._committed) return;
-      input._committed = true;
-      const text = input.value.trim();
-      if (text) {
-        // Create text annotation instead of drawing directly to canvas
-        const textAnnotation = new TextAnnotation(coords.x, coords.y, text, state.color, state.fontSize);
-        state.annotations.push(textAnnotation);
-        selectAnnotation(textAnnotation);
-        redrawCanvas();
-        saveHistory();
-      }
-      input.remove();
-    };
-    
-    input.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Enter") {
-        e.preventDefault();
-        commitText();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        input._committed = true;
-        input.remove();
-      }
-    });
-    
-    input.addEventListener("blur", commitText);
-    
+    openTextEditor({ x: coords.x, y: coords.y });
     state.isDrawing = false;
   }
+}
+
+// Shared inline text-input overlay, used both for placing new text and for
+// double-click-to-edit on an existing TextAnnotation.
+function openTextEditor({ x, y, existing }) {
+  const fontSize = existing ? existing.fontSize : state.fontSize;
+  const color = existing ? existing.color : state.color;
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "annotation-text-input";
+  if (existing) input.value = existing.text;
+
+  // Position in display (CSS) coordinates
+  const displayScale = state.displayScale || 1;
+  input.style.position = "absolute";
+  input.style.left = (x / (canvas.width / canvas.getBoundingClientRect().width)) + "px";
+  input.style.top = ((y - fontSize) / (canvas.height / canvas.getBoundingClientRect().height)) + "px";
+  input.style.font = `${fontSize * displayScale}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+  input.style.color = color;
+  input.style.background = "rgba(0,0,0,0.8)";
+  input.style.border = "2px solid " + color;
+  input.style.borderRadius = "4px";
+  input.style.padding = "4px 8px";
+  input.style.outline = "none";
+  input.style.zIndex = "1000";
+  input.style.minWidth = "200px";
+
+  // Hide the existing annotation while its text is being edited so it isn't
+  // drawn twice (once baked in the redraw, once live in the input overlay).
+  if (existing) existing.editing = true;
+  redrawCanvas();
+
+  canvasWrapper.appendChild(input);
+  input.focus();
+  input.select();
+
+  const commitText = () => {
+    if (input._committed) return;
+    input._committed = true;
+    const text = input.value.trim();
+
+    if (existing) {
+      existing.editing = false;
+      if (text) {
+        existing.text = text;
+      } else {
+        const index = state.annotations.indexOf(existing);
+        if (index > -1) state.annotations.splice(index, 1);
+      }
+      redrawCanvas();
+      saveHistory();
+    } else if (text) {
+      const textAnnotation = new TextAnnotation(x, y, text, color, fontSize);
+      state.annotations.push(textAnnotation);
+      selectAnnotation(textAnnotation);
+      redrawCanvas();
+      saveHistory();
+    }
+    input.remove();
+  };
+
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitText();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      input._committed = true;
+      if (existing) existing.editing = false;
+      redrawCanvas();
+      input.remove();
+    }
+  });
+
+  input.addEventListener("blur", commitText);
 }
 
 function handleMouseMove(e) {
@@ -817,10 +1003,54 @@ function handleMouseMove(e) {
 
   if (state.currentTool === "draw" || state.currentTool === "highlight") {
     if (state.currentStroke) {
+      const prevPoint = state.currentStroke.strokes[state.currentStroke.strokes.length - 1];
       state.currentStroke.addPoint(coords.x, coords.y);
-      redrawCanvas();
+      // Draw just the new segment instead of a full clear+redraw — cheaper,
+      // and doesn't touch the base layer until the stroke is actually committed.
+      if (prevPoint) {
+        ctx.strokeStyle = state.currentStroke.color;
+        ctx.lineWidth = state.currentStroke.lineWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(prevPoint.x, prevPoint.y);
+        ctx.lineTo(coords.x, coords.y);
+        ctx.stroke();
+      }
+    }
+    return;
+  }
+
+  if (state.currentTool === "rect" || state.currentTool === "arrow") {
+    // Live preview while dragging out a new shape — previously the shape was
+    // invisible until mouseup, so you were drawing "blind."
+    redrawCanvas();
+    let endX = coords.x, endY = coords.y;
+    if (state.currentTool === "arrow" && e.shiftKey) {
+      ({ x: endX, y: endY } = snapArrowAngle(state.startX, state.startY, coords.x, coords.y));
+    }
+    if (state.currentTool === "rect") {
+      const preview = new RectAnnotation(state.startX, state.startY, endX - state.startX, endY - state.startY, state.color, state.lineWidth);
+      preview.draw(ctx);
+    } else {
+      const preview = new ArrowAnnotation(state.startX, state.startY, endX, endY, state.color, state.lineWidth);
+      preview.draw(ctx);
     }
   }
+}
+
+// Hold Shift while drawing an arrow to snap it to 45° increments — common in
+// mainstream annotation tools (Figma, PowerPoint) for pointing precisely.
+function snapArrowAngle(startX, startY, x, y) {
+  const dx = x - startX, dy = y - startY;
+  const distance = Math.hypot(dx, dy);
+  if (distance === 0) return { x, y };
+  const snapIncrement = Math.PI / 4; // 45°
+  const angle = Math.round(Math.atan2(dy, dx) / snapIncrement) * snapIncrement;
+  return {
+    x: startX + Math.cos(angle) * distance,
+    y: startY + Math.sin(angle) * distance
+  };
 }
 
 function handleMouseUp(e) {
@@ -855,11 +1085,22 @@ function handleMouseUp(e) {
       saveHistory();
     }
   } else if (state.currentTool === "arrow") {
-    const arrowAnnotation = new ArrowAnnotation(state.startX, state.startY, coords.x, coords.y, state.color, state.lineWidth);
-    state.annotations.push(arrowAnnotation);
-    selectAnnotation(arrowAnnotation);
-    redrawCanvas();
-    saveHistory();
+    let endX = coords.x, endY = coords.y;
+    if (e.shiftKey) {
+      ({ x: endX, y: endY } = snapArrowAngle(state.startX, state.startY, coords.x, coords.y));
+    }
+    // A plain click with no real drag has nothing to point at — skip it
+    // instead of leaving a zero-length arrow (just an arrowhead triangle).
+    const dragDistance = Math.hypot(endX - state.startX, endY - state.startY);
+    if (dragDistance > 5) {
+      const arrowAnnotation = new ArrowAnnotation(state.startX, state.startY, endX, endY, state.color, state.lineWidth);
+      state.annotations.push(arrowAnnotation);
+      selectAnnotation(arrowAnnotation);
+      redrawCanvas();
+      saveHistory();
+    } else {
+      redrawCanvas();
+    }
   } else if (state.currentTool === "draw" || state.currentTool === "highlight") {
     if (state.currentStroke && state.currentStroke.strokes.length > 1) {
       // Commit drawing immediately to canvas since it can't be edited
@@ -946,32 +1187,22 @@ function handleCropEnd(e) {
     canvasWrapper.style.width = cropDisplayW;
     canvasWrapper.style.height = cropDisplayH;
 
-    // Draw cropped image
+    // Draw cropped image onto both the visible canvas and the base layer,
+    // synchronously — no async reload needed, so there's no window where a
+    // fast follow-up action could run against stale (pre-crop) dimensions.
     ctx.putImageData(imageData, 0, 0);
+    baseCanvas.width = canvasWidth;
+    baseCanvas.height = canvasHeight;
+    baseCtx.putImageData(imageData, 0, 0);
 
-    // Rebuild the base image from the cropped pixels so future redraws
-    // (undo, new annotations, selection) use the cropped result instead of
-    // stretching the original full-size screenshot back into the new canvas size.
-    const croppedDataUrl = canvas.toDataURL("image/png");
-    const croppedImg = new Image();
-    croppedImg.onload = () => {
-      state.originalImage = croppedImg;
+    // Any uncommitted annotations were positioned relative to the old,
+    // uncropped canvas — their coordinates no longer make sense, so drop them.
+    state.annotations = [];
+    clearSelection();
 
-      // Any uncommitted annotations were positioned relative to the old,
-      // uncropped canvas — their coordinates no longer make sense, so drop them.
-      state.annotations = [];
-      clearSelection();
-
-      // The crop is a new baseline: reset history so undo can't revert to a
-      // full-size image that no longer matches the (now smaller) canvas.
-      state.history = [];
-      state.historyIndex = -1;
-      saveHistory();
-
-      redrawCanvas();
-      showToast("Area cropped!");
-    };
-    croppedImg.src = croppedDataUrl;
+    saveHistory();
+    redrawCanvas();
+    showToast("Area cropped!");
   }
 
   // Reset crop state

@@ -145,7 +145,7 @@
     .sections-grid.small {
       grid-template-columns: 1fr 1fr;
     }
-    .section-check {
+    .section-check, .format-toggle {
       display: flex;
       align-items: center;
       gap: 8px;
@@ -157,8 +157,8 @@
       transition: all 0.2s;
       user-select: none;
     }
-    .section-check:hover { border-color: var(--accent); }
-    .section-check.checked { border-color: var(--accent); background: rgba(232,255,71,0.05); }
+    .section-check:hover, .format-toggle:hover { border-color: var(--accent); }
+    .section-check.checked, .format-toggle.checked { border-color: var(--accent); background: rgba(232,255,71,0.05); }
     .section-check input[type=checkbox] { display: none; }
     .check-box {
       width: 14px; height: 14px;
@@ -169,7 +169,7 @@
       font-size: 9px;
       transition: all 0.2s;
     }
-    .section-check.checked .check-box {
+    .section-check.checked .check-box, .format-toggle.checked .check-box {
       background: var(--accent);
       border-color: var(--accent);
       color: #000;
@@ -422,6 +422,18 @@
         <div class="tag-input-wrap" id="custom-sections-wrap">
           <input class="tag-input" id="custom-section-input" placeholder="e.g. Workaround, Related Tickets…" />
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2c: Output Formatting -->
+  <div class="row full">
+    <div class="section">
+      <div class="section-title">Output Formatting</div>
+      <div class="section-desc">Controls how the AI writes exact values (UI element names, error messages, field values) in the generated ticket.</div>
+      <div class="format-toggle checked" id="markdown-formatting-toggle">
+        <div class="check-box">✓</div>
+        <span class="check-label">Use Markdown (**bold** / `code`) instead of "quotes" for exact values</span>
       </div>
     </div>
   </div>

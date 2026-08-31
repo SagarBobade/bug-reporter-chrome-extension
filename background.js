@@ -189,6 +189,7 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasS
     extraInstructions      = "",
     enabledSections        = ["summary","environment","steps","expected","actual","impact","priority","acceptance","context"],
     customSections         = [],
+    useMarkdownFormatting  = true,
   } = settings;
 
   const { browser, os } = getBrowserInfo();
@@ -210,8 +211,8 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasS
   ];
 
   const screenshotInstruction = hasScreenshots
-    ? `\nAnalyze the screenshots carefully. No markdown code blocks in output.`
-    : `\nUse the provided notes/context to understand the bug. No markdown code blocks in output.`;
+    ? `\nAnalyze the screenshots carefully. No fenced code blocks (triple backticks) in output.`
+    : `\nUse the provided notes/context to understand the bug. No fenced code blocks (triple backticks) in output.`;
 
   const systemPrompt = [
     `You are a senior QA engineer writing a bug report following standard bug-tracking conventions (Jira/Linear style). Be CONCISE and MINIMAL.`,
@@ -220,6 +221,9 @@ function buildPrompt({ pageUrl, pageTitle, audioNote, settings, screenInfo, hasS
     `Steps to Reproduce: numbered, imperative mood ("Click", "Enter", "Navigate to" — never "The user clicks"), exactly one user action per step, starting from a known state, ending on the step that triggers the bug.`,
     `Summary and Actual Behavior must name the exact UI element (button, field, modal, label) visible in the screenshots — never a vague description like "something is broken".`,
     `Use consistent present tense throughout every section.`,
+    useMarkdownFormatting
+      ? "For exact values, use Markdown instead of quotation marks: `backticks` for exact strings, error codes, or field values; **bold** for UI element/button names. Never wrap them in double quotes."
+      : "",
     domainContext ? `\nPRODUCT CONTEXT: ${domainContext}` : "",
     techStack     ? `TECH STACK: ${techStack}` : "",
     screenshotInstruction,
