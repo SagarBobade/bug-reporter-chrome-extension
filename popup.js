@@ -1339,6 +1339,57 @@ async function createCompositeImage(screenshots) {
   });
 }
 
+// Convert the AI's Markdown output to HTML so rich-text targets (e.g. Jira's
+// description editor) render bold/code/lists instead of showing raw asterisks.
+function markdownToHtml(md) {
+  const escapeHtml = (s) => s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  const inline = (s) => escapeHtml(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+  const lines = md.split('\n');
+  const html = [];
+  let listType = null; // 'ul' | 'ol' | null
+
+  const closeList = () => {
+    if (listType) { html.push(`</${listType}>`); listType = null; }
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const heading = line.match(/^##\s+(.+)$/);
+    const checkbox = line.match(/^-\s+\[ \]\s*(.*)$/);
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    const numbered = line.match(/^\d+\.\s+(.+)$/);
+
+    if (heading) {
+      closeList();
+      html.push(`<h2>${inline(heading[1])}</h2>`);
+    } else if (checkbox) {
+      if (listType !== 'ul') { closeList(); html.push('<ul>'); listType = 'ul'; }
+      html.push(`<li>☐ ${inline(checkbox[1])}</li>`);
+    } else if (bullet) {
+      if (listType !== 'ul') { closeList(); html.push('<ul>'); listType = 'ul'; }
+      html.push(`<li>${inline(bullet[1])}</li>`);
+    } else if (numbered) {
+      if (listType !== 'ol') { closeList(); html.push('<ol>'); listType = 'ol'; }
+      html.push(`<li>${inline(numbered[1])}</li>`);
+    } else if (line.trim() === '') {
+      closeList();
+      html.push('<br>');
+    } else {
+      closeList();
+      html.push(`<p>${inline(line)}</p>`);
+    }
+  }
+  closeList();
+  return html.join('\n');
+}
+
 function showCopyFeedback(msg) {
   btnCopy.textContent = msg;
   btnCopy.classList.add("copied");
@@ -1362,10 +1413,8 @@ btnCopy.addEventListener("click", async () => {
     clipboardItems['text/plain'] = new Blob([textContent], { type: 'text/plain' });
     
     // Enhanced HTML version
-    let htmlContent = resultTextarea.value
-      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-      .replace(/\n/g, '<br>');
-    
+    let htmlContent = markdownToHtml(resultTextarea.value);
+
     if (state.videoBlobUrl) {
       htmlContent += '<br><br><strong>Attachments:</strong><br>';
       htmlContent += '🎬 1 screen recording (download separately)<br>';
