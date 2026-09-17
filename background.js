@@ -528,6 +528,70 @@ async function captureScreenshot() {
   return dataUrl;
 }
 
+// ── GIF Recording (tab capture via offscreen document) ───────────────────────
+// Records the current tab directly (no screen-picker, no dedicated tab) by
+// handing a tabCapture stream id to a persistent offscreen document — the
+// popup closes as soon as recording starts so the user can interact with the
+// page, and the offscreen document keeps encoding after the popup is gone.
+//
+// chrome.storage is unreliable to call directly from inside the offscreen
+// document itself (observed missing entirely, persistently, even on a freshly
+// created document) — so all storage for the GIF flow happens here in the
+// service worker instead, via the SAVE_GIF_STATE message the offscreen
+// document sends whenever it needs to persist state.
+const GIF_RECORDING_KEY = "bugReporterGifRecording";
+
+async function ensureOffscreenDocument() {
+  const hasDoc = await chrome.offscreen.hasDocument();
+  if (hasDoc) {
+    try { await chrome.offscreen.closeDocument(); } catch (e) { /* already gone */ }
+  }
+  await chrome.offscreen.createDocument({
+    url: chrome.runtime.getURL("offscreen.html"),
+    reasons: ["USER_MEDIA"],
+    justification: "Capture the current tab's frames to build an animated GIF for the bug report."
+  });
+}
+
+// Wraps sendMessage in a Promise that resolves the response (or rejects on failure)
+// instead of firing blind — an unanswered fire-and-forget message is how a dead
+// offscreen document's failure turns into a silent no-op instead of a visible error.
+function sendMessageToOffscreen(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (res) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!res || !res.ok) {
+        reject(new Error(res?.error || "GIF recorder did not start"));
+        return;
+      }
+      resolve(res);
+    });
+  });
+}
+
+async function startGifRecording(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab || !tab.url || tab.url.startsWith("chrome://") || tab.url.startsWith("chrome-extension://")) {
+    throw new Error("Cannot record on this page. Navigate to a regular website first.");
+  }
+
+  const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  await ensureOffscreenDocument();
+  await sendMessageToOffscreen({ type: "OFFSCREEN_START_GIF", streamId, tabId });
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["gif-recording-controls.js"]
+    });
+  } catch (e) {
+    console.warn("Could not inject GIF recording controls:", e);
+  }
+}
+
 // ── Test API Key ──────────────────────────────────────────────────────────────
 async function testApiKey(provider, apiKey) {
   const testPrompt = "Hello";
@@ -753,6 +817,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const { currentTicket, feedback, chatHistory, screenshots } = msg.payload;
     improveTicket({ currentTicket, feedback, chatHistory, screenshots })
       .then(ticket => sendResponse({ ok: true, ticket }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "START_GIF_RECORDING") {
+    startGifRecording(msg.tabId)
+      .then(() => sendResponse({ ok: true }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "GIF_RECORDING_FINISHED" || msg.type === "GIF_RECORDING_ERROR") {
+    if (msg.tabId) {
+      chrome.tabs.sendMessage(msg.tabId, { type: "REMOVE_GIF_RECORDING_CONTROLS" }).catch(() => { /* tab may be closed */ });
+    }
+    return false;
+  }
+
+  // The offscreen document delegates its GIF-recording storage writes here, since
+  // chrome.storage isn't reliably available from inside an offscreen document.
+  if (msg.type === "SAVE_GIF_STATE") {
+    chrome.storage.local.set({ [GIF_RECORDING_KEY]: msg.data })
+      .then(() => sendResponse({ ok: true }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }

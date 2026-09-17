@@ -65,6 +65,7 @@ const state = {
   videoExtension: "webm", // File extension matching the recorded video's actual codec
   videoRecordingEnabled: false, // Setting: whether video recording is enabled
   isTranscriptUpdate: false, // Flag to distinguish transcript vs user edits
+  gifBlobUrl: null, // Blob URL for GIF download (GIF NOT sent to AI)
 };
 
 const MAX_SCREENSHOTS = 6;
@@ -118,6 +119,28 @@ const resultVideo      = $("result-video");
 const resultVideoPlayer = $("result-video-player");
 const btnResultDownloadVideo = $("btn-result-download-video");
 const btnResultDeleteVideo = $("btn-result-delete-video");
+const btnGif           = $("btn-gif");
+const gifPreview       = $("gif-preview");
+const btnDeleteGif     = $("btn-delete-gif");
+const btnDownloadGif   = $("btn-download-gif");
+const infoVideo        = $("info-video");
+const infoGif          = $("info-gif");
+
+// The "ⓘ" hints live inside the record buttons so the tooltip shows on hover without
+// extra layout — but that means a click on the icon itself would otherwise bubble up
+// and start a recording. Swallow it here so it's purely informational.
+[infoVideo, infoGif].forEach((el) => {
+  if (!el) return;
+  el.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+});
+const gifInfoText      = $("gif-info-text");
+const resultGif        = $("result-gif");
+const resultGifPlayer  = $("result-gif-player");
+const btnResultDownloadGif = $("btn-result-download-gif");
+const btnResultDeleteGif = $("btn-result-delete-gif");
 
 const noteInputWrap    = $("note-input-wrap");
 const btnClearNote     = $("btn-clear-note");
@@ -469,6 +492,9 @@ async function init() {
   if (state.videoRecordingEnabled) {
     await checkVideoRecording();
   }
+
+  // Check for completed GIF recording
+  await checkGifRecording();
 
   chrome.runtime.sendMessage({ type: "CHECK_API_KEY" }, (res) => {
     if (res?.ok) {
@@ -1067,11 +1093,172 @@ function deleteVideo() {
     resultVideo.style.display = "none";
     resultVideoPlayer.src = "";
   }
+}
+
+// ── GIF Recording ─────────────────────────────────────────────────────────────
+const GIF_RECORDING_KEY = "bugReporterGifRecording";
+
+btnGif.addEventListener("click", async () => {
+  const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (!currentTab || currentTab.url.startsWith("chrome://") || currentTab.url.startsWith("chrome-extension://")) {
+    showError("Cannot record on this page. Navigate to a regular website first.");
+    return;
+  }
+
+  btnGif.disabled = true;
+  btnGif.textContent = "Starting GIF recording...";
+
+  chrome.runtime.sendMessage({ type: "START_GIF_RECORDING", tabId: currentTab.id }, (res) => {
+    btnGif.disabled = false;
+    btnGif.innerHTML = `<span>🎞️</span> Record GIF`;
+
+    if (!res || !res.ok) {
+      showError("Failed to start GIF recording: " + (res && res.error ? res.error : "Unknown error"));
+      return;
+    }
+
+    // Close the popup so the user can interact with the page being recorded —
+    // a floating control chip on the page itself stops the recording.
+    window.close();
+  });
+});
+
+// Generous ceiling past the recorder's own 12s capture + 45s render timeout — if a
+// recording/rendering flag is still set well past that, the offscreen document died
+// without ever reporting back, so treat it as stuck rather than blocking the button
+// forever with no way to recover.
+const GIF_STUCK_TIMEOUT_MS = 90000;
+
+// Check for an in-progress or completed GIF recording when popup opens
+async function checkGifRecording() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(GIF_RECORDING_KEY, (result) => {
+      const data = result[GIF_RECORDING_KEY];
+
+      if (data && data.gifBlobBase64) {
+        const binaryStr = atob(data.gifBlobBase64);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: 'image/gif' });
+        state.gifBlobUrl = URL.createObjectURL(blob);
+
+        // Show GIF preview (GIF is NOT sent to AI - only for download)
+        gifPreview.style.display = "block";
+        btnGif.style.display = "none";
+        gifInfoText.textContent = "🎞️ GIF recorded (download to attach)";
+
+        showToast("GIF ready for download!", "success");
+        resolve();
+        return;
+      }
+
+      if (data && (data.isRecording || data.rendering)) {
+        const isStuck = data.startTime && (Date.now() - data.startTime > GIF_STUCK_TIMEOUT_MS);
+        if (isStuck) {
+          chrome.storage.local.remove(GIF_RECORDING_KEY);
+          btnGif.disabled = false;
+          btnGif.innerHTML = `<span>🎞️</span> Record GIF`;
+          showToast("Previous GIF recording got stuck and was reset — try again.", "warning");
+          resolve();
+          return;
+        }
+
+        btnGif.disabled = true;
+        btnGif.innerHTML = data.rendering
+          ? `<span>🎞️</span> Rendering GIF… please wait`
+          : `<span>🎞️</span> Recording GIF… (use on-page control to stop)`;
+        resolve();
+        return;
+      }
+
+      if (data && data.error) {
+        chrome.storage.local.remove(GIF_RECORDING_KEY);
+        btnGif.disabled = false;
+        btnGif.innerHTML = `<span>🎞️</span> Record GIF`;
+        showError("GIF recording failed: " + data.error);
+      }
+
+      resolve();
+    });
+  });
+}
+
+// Live-update the popup if it's still open through the offscreen recorder's lifecycle
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "GIF_RECORDING_FINISHED") {
+    checkGifRecording();
+  } else if (msg.type === "GIF_RECORDING_RENDERING") {
+    btnGif.disabled = true;
+    btnGif.innerHTML = `<span>🎞️</span> Rendering GIF… please wait`;
+  } else if (msg.type === "GIF_RECORDING_ERROR") {
+    btnGif.disabled = false;
+    btnGif.innerHTML = `<span>🎞️</span> Record GIF`;
+    showError("GIF recording failed: " + (msg.error || "Unknown error"));
+  }
+});
+
+// Download GIF
+btnDownloadGif.addEventListener("click", () => {
+  downloadGif();
+});
+
+// Download GIF from result panel
+btnResultDownloadGif.addEventListener("click", () => {
+  downloadGif();
+});
+
+// Delete GIF from result panel
+btnResultDeleteGif.addEventListener("click", async () => {
+  const confirmed = await showConfirmDialog(
+    "Remove GIF?",
+    "This will remove the GIF from this bug report. You can still record a new one.",
+    "Remove"
+  );
+  if (confirmed) {
+    deleteGif();
+  }
+});
+
+function downloadGif() {
+  if (!state.gifBlobUrl) {
+    showToast("No GIF available to download", "error");
+    return;
+  }
+
+  const a = document.createElement("a");
+  a.href = state.gifBlobUrl;
+  a.download = `bug-recording-${Date.now()}.gif`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  showToast("GIF downloaded!", "success");
+}
+
+// Shared function to delete GIF
+function deleteGif() {
+  if (state.gifBlobUrl) {
+    URL.revokeObjectURL(state.gifBlobUrl);
+    state.gifBlobUrl = null;
+  }
+
+  chrome.storage.local.remove(GIF_RECORDING_KEY);
+
+  gifPreview.style.display = "none";
+  btnGif.style.display = "block";
+
+  if (resultGif) {
+    resultGif.style.display = "none";
+    resultGifPlayer.src = "";
+  }
   
   // Update session storage
   saveSession();
 
-  showToast("Video removed", "info");
+  showToast("GIF removed", "info");
 }
 
 // Delete video
@@ -1084,6 +1271,18 @@ btnDeleteVideo.addEventListener("click", async () => {
   if (!confirmed) return;
 
   deleteVideo();
+});
+
+// Delete GIF
+btnDeleteGif.addEventListener("click", async () => {
+  const confirmed = await showConfirmDialog(
+    "Delete GIF?",
+    "Remove the recorded GIF?",
+    "Delete"
+  );
+  if (!confirmed) return;
+
+  deleteGif();
 });
 
 // ── Clear all screenshots ──────────────────────────────────────────────────
@@ -1272,6 +1471,16 @@ function displayResultPanel() {
       resultVideo.style.display = "none";
     }
   }
+
+  // Show GIF preview and controls if a GIF is available
+  if (resultGif) {
+    if (state.gifBlobUrl) {
+      resultGif.style.display = "block";
+      resultGifPlayer.src = state.gifBlobUrl;
+    } else {
+      resultGif.style.display = "none";
+    }
+  }
 }
 
 // Copy a single image to clipboard
@@ -1401,11 +1610,16 @@ btnCopy.addEventListener("click", async () => {
     let textContent = resultTextarea.value;
     
     // Add attachment instructions to text content if we have media
-    if (state.videoBlobUrl) {
+    if (state.videoBlobUrl || state.gifBlobUrl) {
       textContent += '\n\n--- ATTACHMENTS ---\n';
-      textContent += '🎬 1 screen recording (use download button below - cannot be pasted directly)\n';
+      if (state.videoBlobUrl) {
+        textContent += '🎬 1 screen recording (use download button below - cannot be pasted directly)\n';
+      }
+      if (state.gifBlobUrl) {
+        textContent += '🎞️ 1 GIF recording (use download button below - cannot be pasted directly)\n';
+      }
     }
-    
+
     // Prepare clipboard items with multiple formats
     const clipboardItems = {};
     
@@ -1415,11 +1629,16 @@ btnCopy.addEventListener("click", async () => {
     // Enhanced HTML version
     let htmlContent = markdownToHtml(resultTextarea.value);
 
-    if (state.videoBlobUrl) {
+    if (state.videoBlobUrl || state.gifBlobUrl) {
       htmlContent += '<br><br><strong>Attachments:</strong><br>';
-      htmlContent += '🎬 1 screen recording (download separately)<br>';
+      if (state.videoBlobUrl) {
+        htmlContent += '🎬 1 screen recording (download separately)<br>';
+      }
+      if (state.gifBlobUrl) {
+        htmlContent += '🎞️ 1 GIF recording (download separately)<br>';
+      }
     }
-    
+
     clipboardItems['text/html'] = new Blob([htmlContent], { type: 'text/html' });
     
     // Strategy: Create a composite image if multiple screenshots, or use single image
@@ -1460,24 +1679,25 @@ btnCopy.addEventListener("click", async () => {
     } else if (state.screenshots.length > 1) {
       toastMessage = `Ticket + composite image (${state.screenshots.length} screenshots) copied!`;
     }
-    if (state.videoBlobUrl) {
-      toastMessage += " Use download button for video.";
+    if (state.videoBlobUrl || state.gifBlobUrl) {
+      toastMessage += " Use download button for video/GIF.";
     }
-    
+
     showToast(toastMessage, "success");
-    
+
   } catch (err) {
     console.error('Clipboard copy failed:', err);
     // Fallback to plain text copy
     let fallbackText = resultTextarea.value;
-    if (state.videoBlobUrl) {
+    if (state.videoBlobUrl || state.gifBlobUrl) {
       fallbackText += '\n\n--- ATTACHMENTS ---\n';
-      fallbackText += '🎬 1 screen recording (use download button)\n';
+      if (state.videoBlobUrl) fallbackText += '🎬 1 screen recording (use download button)\n';
+      if (state.gifBlobUrl) fallbackText += '🎞️ 1 GIF recording (use download button)\n';
     }
-    
+
     await navigator.clipboard.writeText(fallbackText);
     showCopyFeedback("✓ Copied!");
-    showToast("Ticket copied! Click screenshots individually or use download button for video.", "warning");
+    showToast("Ticket copied! Click screenshots individually or use download button for video/GIF.", "warning");
   }
 });
 
@@ -1557,8 +1777,13 @@ btnReset.addEventListener("click", async () => {
     URL.revokeObjectURL(state.videoBlobUrl);
     state.videoBlobUrl = null;
   }
-  // Clear video recording data
+  if (state.gifBlobUrl) {
+    URL.revokeObjectURL(state.gifBlobUrl);
+    state.gifBlobUrl = null;
+  }
+  // Clear video/GIF recording data
   chrome.storage.local.remove(VIDEO_RECORDING_KEY);
+  chrome.storage.local.remove(GIF_RECORDING_KEY);
   noteInput.value = ""; fieldComp.value = ""; fieldSev.value = "Medium";
   resultTextarea.value = "";
   clearSession();
@@ -1566,6 +1791,7 @@ btnReset.addEventListener("click", async () => {
   capturePanel.style.display = "block";
   $("result-screenshots").style.display = "none";
   if (resultVideo) resultVideo.style.display = "none";
+  if (resultGif) resultGif.style.display = "none";
   chatHistory.innerHTML = "";
 
   // Reset video UI
@@ -1573,6 +1799,10 @@ btnReset.addEventListener("click", async () => {
   if (state.videoRecordingEnabled && btnRecord) {
     btnRecord.style.display = "block";
   }
+
+  // Reset GIF UI
+  gifPreview.style.display = "none";
+  btnGif.style.display = "block";
 
   renderGrid(); updateGenerateBtn(); clearError();
   showToast("Bug report cleared", "info");
