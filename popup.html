@@ -26,15 +26,17 @@
     /* Chrome sizes the popup window to the document's natural layout width, not just
        the CSS `width` below — if any child wants more room than 380px (long unwrapped
        text, an oversized image, etc.) the popup itself grows to fit it, which is what
-       causes the popup to look wider on some screens. Locking width/max-width on both
-       html and body, plus clamping media, keeps the popup a fixed 380px regardless. */
+       causes the popup to look wider on some screens. Capping max-width at 380px on
+       both html and body, plus clamping media, keeps the popup from growing past that.
+       Using width:100% (not a fixed width) lets it shrink instead of overflowing when
+       Chrome allots less than 380px of screen space, e.g. on lower-resolution displays. */
     html {
-      width: 380px;
+      width: 100%;
       max-width: 380px;
     }
 
     body {
-      width: 380px;
+      width: 100%;
       max-width: 380px;
       min-height: 520px;
       background: var(--bg);
@@ -106,7 +108,7 @@
     /* ── Steps indicator ─────────────────────────────────── */
     .steps {
       display: flex;
-      padding: 10px 18px;
+      padding: 8px 16px;
       gap: 0;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
@@ -117,21 +119,23 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: 10px;
-      color: var(--muted);
+      font-size: 11.5px;
+      font-weight: 700;
+      color: #cbd5e1;
       font-family: 'SF Mono', Monaco, monospace;
-      letter-spacing: 0.3px;
+      letter-spacing: 0.2px;
     }
 
     .step-num {
-      width: 18px;
-      height: 18px;
+      width: 19px;
+      height: 19px;
       border-radius: 50%;
       border: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 9px;
+      font-size: 10px;
+      font-weight: 700;
       flex-shrink: 0;
       transition: all 0.3s;
     }
@@ -265,6 +269,25 @@
       background: var(--surface2);
     }
 
+    /* ── Capture button grid (two buttons per row) ───────── */
+    .capture-btn-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .capture-btn-grid .btn-capture {
+      margin-bottom: 0;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px 6px;
+      font-size: 10.5px;
+      min-height: 56px;
+    }
+    .capture-btn-grid .btn-capture .shortcut {
+      display: none;
+    }
+
     /* ── Capture button ──────────────────────────────────── */
     .btn-capture {
       width: 100%;
@@ -302,8 +325,12 @@
     }
 
     /* Hover-only hint that a recording is kept out of the AI ticket generation —
-       intercepted on click (see popup.js) so tapping it never starts a recording. */
+       intercepted on click (see popup.js) so tapping it never starts a recording.
+       Uses a custom ::after tooltip (data-tooltip) instead of the native `title`
+       attribute so it appears instantly on hover instead of after the browser's
+       built-in delay. */
     .info-icon {
+      position: relative;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -323,27 +350,53 @@
       color: var(--text);
       border-color: var(--accent);
     }
+    .info-icon::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: 130%;
+      right: 0;
+      width: 150px;
+      padding: 6px 8px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 400;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      line-height: 1.4;
+      text-align: left;
+      white-space: normal;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.08s ease;
+      z-index: 20;
+    }
+    .info-icon:hover::after {
+      opacity: 1;
+      visibility: visible;
+    }
 
     .btn-capture.btn-annotate {
-      margin-bottom: 14px;
       border-color: var(--accent2);
-      color: var(--accent2);
+      color: #c4b5fd;
     }
     .btn-capture.btn-annotate:hover {
       border-color: var(--accent2);
-      color: var(--accent2);
+      color: #c4b5fd;
       background: rgba(124, 58, 237, 0.12);
     }
 
     .btn-capture.btn-upload {
-      margin-bottom: 14px;
       border-color: var(--border);
-      color: var(--text-muted);
+      color: var(--text);
     }
     .btn-capture.btn-upload:hover {
-      border-color: var(--border-light);
-      color: var(--text);
-      background: var(--surface2);
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(79, 70, 229, 0.08);
     }
 
     /* ── Video Recording Section ────────────────────────────── */
@@ -351,13 +404,12 @@
       margin-bottom: 14px;
     }
     .btn-capture.btn-record {
-      margin-bottom: 8px;
       border-color: var(--danger);
-      color: var(--danger);
+      color: #fca5a5;
     }
     .btn-capture.btn-record:hover {
       border-color: var(--danger);
-      color: var(--danger);
+      color: #fca5a5;
       background: rgba(239, 68, 68, 0.1);
     }
     .btn-capture.btn-record.recording {
@@ -1249,64 +1301,68 @@
       <!-- thumbnails injected here -->
     </div>
 
-    <button class="btn-capture" id="btn-capture">
-      <span>📸</span>
-      Capture current screen
-      <span class="shortcut">click</span>
-    </button>
+    <div class="capture-btn-grid">
+      <button class="btn-capture" id="btn-capture">
+        <span>📸</span>
+        Capture current screen
+        <span class="shortcut">click</span>
+      </button>
 
-    <button class="btn-capture btn-annotate" id="btn-annotate">
-      <span>✏️</span>
-      Capture & Annotate
-      <span class="shortcut">crop/mark</span>
-    </button>
+      <button class="btn-capture btn-annotate" id="btn-annotate">
+        <span>✏️</span>
+        Capture & Annotate
+        <span class="shortcut">crop/mark</span>
+      </button>
 
-    <button class="btn-capture btn-upload" id="btn-upload">
-      <span>🖼️</span>
-      Upload photo
-      <span class="shortcut">from file</span>
-    </button>
+      <button class="btn-capture btn-upload" id="btn-upload">
+        <span>🖼️</span>
+        Upload photo
+        <span class="shortcut">from file</span>
+      </button>
+
+      <!-- Video Recording button (visibility controlled by settings) -->
+      <div id="video-section" style="display: none;">
+        <button class="btn-capture btn-record" id="btn-record">
+          <span>🎬</span>
+          Record Video
+          <span class="shortcut">new tab</span>
+          <span class="info-icon" id="info-video" data-tooltip="Great for showing the exact steps — download it and attach alongside your ticket.">ⓘ</span>
+        </button>
+      </div>
+
+      <!-- GIF Recording button -->
+      <div id="gif-section">
+        <button class="btn-capture btn-record" id="btn-gif" style="border-color: var(--accent2); color: #c4b5fd;">
+          <span>🎞️</span>
+          Record GIF
+          <span class="shortcut">HD, ~12s clip</span>
+          <span class="info-icon" id="info-gif" data-tooltip="Great for showing the exact steps — download it and attach alongside your ticket.">ⓘ</span>
+        </button>
+      </div>
+    </div>
     <input type="file" id="upload-input" accept="image/png,image/jpeg,image/webp" multiple style="display:none">
 
-    <!-- Video Recording Section (visibility controlled by settings) -->
-    <div id="video-section" class="video-section" style="display: none;">
-      <button class="btn-capture btn-record" id="btn-record">
-        <span>🎬</span>
-        Record Video
-        <span class="shortcut">new tab</span>
-        <span class="info-icon" id="info-video" title="Great for showing the exact steps — download it and attach alongside your ticket.">ⓘ</span>
-      </button>
-      <div id="video-preview" class="video-preview" style="display: none;">
-        <div class="video-frames-info">
-          <span id="video-info-text">🎬 Video recorded</span>
-          <div style="display: flex; gap: 6px;">
-            <button class="thumb-del" id="btn-download-video" title="Download video" style="background: var(--accent); color: #000;">⬇</button>
-            <button class="thumb-del" id="btn-delete-video" title="Remove video">✕</button>
-          </div>
+    <div id="video-preview" class="video-preview" style="display: none;">
+      <div class="video-frames-info">
+        <span id="video-info-text">🎬 Video recorded</span>
+        <div style="display: flex; gap: 6px;">
+          <button class="thumb-del" id="btn-download-video" title="Download video" style="background: var(--accent); color: #000;">⬇</button>
+          <button class="thumb-del" id="btn-delete-video" title="Remove video">✕</button>
         </div>
       </div>
     </div>
 
-    <!-- GIF Recording Section -->
-    <div id="gif-section" class="video-section">
-      <button class="btn-capture btn-record" id="btn-gif" style="border-color: var(--accent2); color: var(--accent2);">
-        <span>🎞️</span>
-        Record GIF
-        <span class="shortcut">HD, ~12s clip</span>
-        <span class="info-icon" id="info-gif" title="Great for showing the exact steps — download it and attach alongside your ticket.">ⓘ</span>
-      </button>
-      <div id="gif-preview" class="video-preview" style="display: none;">
-        <div class="video-frames-info">
-          <span id="gif-info-text">🎞️ GIF recorded</span>
-          <div style="display: flex; gap: 6px;">
-            <button class="thumb-del" id="btn-download-gif" title="Download GIF" style="background: var(--accent); color: #000;">⬇</button>
-            <button class="thumb-del" id="btn-delete-gif" title="Remove GIF">✕</button>
-          </div>
+    <div id="gif-preview" class="video-preview" style="display: none;">
+      <div class="video-frames-info">
+        <span id="gif-info-text">🎞️ GIF recorded</span>
+        <div style="display: flex; gap: 6px;">
+          <button class="thumb-del" id="btn-download-gif" title="Download GIF" style="background: var(--accent); color: #000;">⬇</button>
+          <button class="thumb-del" id="btn-delete-gif" title="Remove GIF">✕</button>
         </div>
       </div>
     </div>
 
-    <div class="section-label">Notes / Context</div>
+    <div class="section-label">Description</div>
 
     <div class="voice-row">
       <div class="mic-wrap">
@@ -1372,7 +1428,7 @@
       </button>
       <div class="input-edit-body" id="input-edit-body">
         <div class="edit-field">
-          <label>Notes / Context</label>
+          <label>Description</label>
           <textarea id="edit-note" class="edit-input" rows="2" placeholder="Describe the bug..."></textarea>
         </div>
         <div class="edit-row">
@@ -1457,12 +1513,6 @@
     </div>
   </div>
 
-</div>
-
-<!-- ── Footer ────────────────────────────────────────────── -->
-<div class="footer">
-  <span class="footer-note" id="page-meta">Loading page info…</span>
-  <span class="footer-note">Gemini 2.0 Flash</span>
 </div>
 
 <!-- ── Toast Container ──────────────────────────────────── -->

@@ -473,10 +473,10 @@ async function init() {
       state.pageUrl   = tab.url || "";
       state.pageTitle = tab.title || "";
       const domain = new URL(tab.url).hostname.replace("www.", "");
-      pageMeta.textContent = domain.length > 30 ? domain.slice(0, 28) + "…" : domain;
+      if (pageMeta) pageMeta.textContent = domain.length > 30 ? domain.slice(0, 28) + "…" : domain;
     }
   } catch (e) {
-    pageMeta.textContent = "Unknown page";
+    if (pageMeta) pageMeta.textContent = "Unknown page";
   }
 
   await restoreSession();
@@ -737,7 +737,7 @@ function renderGrid() {
   for (let i = 0; i < emptyCount; i++) {
     const empty = document.createElement("div");
     empty.className = "screenshot-empty";
-    empty.textContent = "+";
+    empty.textContent = "🖼️";
     screenshotGrid.appendChild(empty);
   }
 
@@ -1314,7 +1314,7 @@ function updateGenerateBtn() {
   if (canGenerate) {
     btnGenerate.innerHTML = `<span>✨</span> Generate Ticket`;
   } else {
-    btnGenerate.innerHTML = `<span>📝</span> Add screenshot or notes first`;
+    btnGenerate.innerHTML = `<span>📝</span> Add media or description first`;
   }
 }
 
