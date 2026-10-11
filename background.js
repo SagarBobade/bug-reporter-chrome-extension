@@ -707,8 +707,144 @@ Please improve the ticket based on this feedback. Return only the updated ticket
   return text;
 }
 
+// ── Keyboard shortcuts (manifest "commands") ─────────────────────────────────
+// Shortcuts usually fire while the popup is closed, so results are written straight
+// into the popup's persisted session (picked up on next open). If the popup *is*
+// open, it owns the session in memory — hand the result to it instead, otherwise its
+// next saveSession() would overwrite what we wrote. The toolbar badge gives feedback.
+const SESSION_KEY = "bugReporterSession";
+const MAX_SCREENSHOTS = 6;
+
+function isRestrictedUrl(url) {
+  return !url || url.startsWith("chrome://") || url.startsWith("chrome-extension://");
+}
+
+async function isPopupOpen() {
+  if (!chrome.runtime.getContexts) return false;
+  try {
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ["POPUP"] });
+    return contexts.length > 0;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function getSession() {
+  const r = await chrome.storage.local.get(SESSION_KEY);
+  return r[SESSION_KEY] || { screenshots: [], note: "", component: "", severity: "Medium" };
+}
+
+async function flashBadge(text, color, ms = 1500) {
+  await chrome.action.setBadgeBackgroundColor({ color });
+  await chrome.action.setBadgeText({ text });
+  setTimeout(async () => {
+    // Don't wipe the persistent mic "REC" badge if recording started meanwhile
+    const current = await chrome.action.getBadgeText({});
+    if (current === text) chrome.action.setBadgeText({ text: "" });
+  }, ms);
+}
+
+async function shortcutCaptureScreenshot(tab) {
+  if (isRestrictedUrl(tab?.url)) {
+    await flashBadge("!", "#ef4444");
+    return;
+  }
+
+  const dataUrl = await captureScreenshot();
+
+  if (await isPopupOpen()) {
+    chrome.runtime.sendMessage({ type: "SHORTCUT_SCREENSHOT", dataUrl }).catch(() => {});
+    return;
+  }
+
+  const session = await getSession();
+  session.screenshots = session.screenshots || [];
+  if (session.screenshots.length >= MAX_SCREENSHOTS) {
+    await flashBadge("MAX", "#f59e0b");
+    return;
+  }
+  session.screenshots.push(dataUrl);
+  await chrome.storage.local.set({ [SESSION_KEY]: session });
+  await flashBadge(String(session.screenshots.length), "#10b981");
+}
+
+// Sends a message to the tab's content script, injecting content.js first if the tab
+// was opened before the extension was installed/reloaded (no receiver exists yet).
+async function sendToContentScript(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (e) {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+    return await chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
+async function shortcutToggleMic(tab) {
+  if (!tab?.id || isRestrictedUrl(tab.url)) {
+    await flashBadge("!", "#ef4444");
+    return;
+  }
+
+  const micState = await sendToContentScript(tab.id, { type: "CHECK_MIC_STATE" });
+  if (micState?.listening) {
+    await chrome.tabs.sendMessage(tab.id, { type: "STOP_MIC" });
+    return;
+  }
+
+  const session = await getSession();
+  const existingText = session.note ? session.note + " " : "";
+  const res = await chrome.tabs.sendMessage(tab.id, { type: "START_MIC", existingText });
+  if (!res?.success) await flashBadge("!", "#ef4444");
+}
+
+chrome.commands.onCommand.addListener(async (command, tab) => {
+  try {
+    if (!tab) [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (command === "capture-screenshot") await shortcutCaptureScreenshot(tab);
+    if (command === "toggle-mic") await shortcutToggleMic(tab);
+  } catch (err) {
+    console.error(`BugReporter: shortcut "${command}" failed:`, err);
+    await flashBadge("!", "#ef4444");
+  }
+});
+
+// Mic badge + transcript persistence. MIC_STATE false is only sent on a real stop
+// (content.js silently restarts recognition across silence gaps without reporting it).
+// Transcript updates arrive rapidly (interim results), and each save is an async
+// read-modify-write — chain them so an older update can never land after a newer one.
+let transcriptWriteChain = Promise.resolve();
+function persistTranscript(text) {
+  transcriptWriteChain = transcriptWriteChain.then(async () => {
+    if (await isPopupOpen()) return; // popup writes the note itself
+    const session = await getSession();
+    session.note = text;
+    await chrome.storage.local.set({ [SESSION_KEY]: session });
+  }).catch(err => console.warn("BugReporter: transcript save failed:", err));
+  return transcriptWriteChain;
+}
+
 // ── Message handler ───────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+
+  if (msg.type === "MIC_STATE") {
+    if (msg.listening) {
+      chrome.action.setBadgeBackgroundColor({ color: "#ef4444" });
+      chrome.action.setBadgeText({ text: "REC" });
+    } else {
+      chrome.action.setBadgeText({ text: "" });
+    }
+    return false;
+  }
+
+  if (msg.type === "MIC_ERROR") {
+    chrome.action.setBadgeText({ text: "" });
+    return false;
+  }
+
+  if (msg.type === "MIC_TRANSCRIPT") {
+    persistTranscript(msg.text);
+    return false;
+  }
 
   if (msg.type === "CHECK_API_KEY") {
     getSettings().then(settings => {

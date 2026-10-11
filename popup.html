@@ -191,7 +191,6 @@
       grid-template-columns: repeat(3, 1fr);
       gap: 6px;
       margin-bottom: 14px;
-      min-height: 80px;
     }
 
     .screenshot-thumb {
@@ -256,18 +255,6 @@
       line-height: 1.4;
     }
     .screenshot-thumb:hover .thumb-edit { opacity: 1; }
-
-    .screenshot-empty {
-      aspect-ratio: 16/9;
-      border-radius: var(--radius);
-      border: 1px dashed var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--muted);
-      font-size: 18px;
-      background: var(--surface2);
-    }
 
     /* ── Capture button grid (two buttons per row) ───────── */
     .capture-btn-grid {
@@ -345,6 +332,13 @@
       opacity: 0.85;
       flex-shrink: 0;
     }
+    /* Label + ⓘ share one line even in the column-stacked grid buttons */
+    .btn-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
     .info-icon:hover {
       opacity: 1;
       color: var(--text);
@@ -486,6 +480,19 @@
       position: static;
       opacity: 1;
     }
+    .video-frames-info .btn-view-media {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .video-frames-info .btn-view-media:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
 
     /* ── Voice note ──────────────────────────────────────── */
     .voice-row {
@@ -545,9 +552,11 @@
     .note-input {
       flex: 1;
       width: 100%;
-      min-height: 36px;
-      max-height: 120px;
-      height: 60px;
+      /* Height is set by resizeNoteInput() in popup.js: grows with content up to
+         NOTE_MAX_ROWS (10) rows, then scrolls. min-height fits the 3-line placeholder,
+         so the box doesn't shrink on the first keystroke. */
+      min-height: 68px;
+      height: 68px;
       padding: 8px 28px 8px 10px;
       background: var(--surface2);
       border: 1px solid var(--border);
@@ -559,7 +568,7 @@
       transition: border-color 0.2s;
       outline: none;
       line-height: 1.5;
-      overflow-y: auto;
+      overflow-y: hidden;
       word-wrap: break-word;
     }
     .note-input:focus { border-color: var(--accent); }
@@ -1170,6 +1179,14 @@
       cursor: zoom-out;
     }
     .preview-modal.visible { display: flex; }
+    .preview-modal.single .preview-nav { display: none; }
+    .preview-modal video {
+      max-width: 95%;
+      max-height: 85%;
+      border-radius: var(--radius);
+      background: #000;
+      cursor: default;
+    }
     .preview-modal img {
       max-width: 95%;
       max-height: 95%;
@@ -1291,14 +1308,17 @@
 
   <!-- Capture panel -->
   <div id="capture-panel">
-    <div class="section-label">
-      Screenshots
-      <span id="shot-count" style="display:none" class="count-badge">0</span>
-      <button id="btn-clear-all" class="btn-clear-all" style="display:none" title="Clear all screenshots">✕ Clear All</button>
-    </div>
+    <!-- Hidden until there's at least one screenshot (toggled in renderGrid) -->
+    <div id="screenshots-section" style="display:none">
+      <div class="section-label">
+        Screenshots
+        <span id="shot-count" style="display:none" class="count-badge">0</span>
+        <button id="btn-clear-all" class="btn-clear-all" style="display:none" title="Clear all screenshots">✕ Clear All</button>
+      </div>
 
-    <div class="screenshot-grid" id="screenshot-grid">
-      <!-- thumbnails injected here -->
+      <div class="screenshot-grid" id="screenshot-grid">
+        <!-- thumbnails injected here -->
+      </div>
     </div>
 
     <div class="capture-btn-grid">
@@ -1324,9 +1344,11 @@
       <div id="video-section" style="display: none;">
         <button class="btn-capture btn-record" id="btn-record">
           <span>🎬</span>
-          Record Video
+          <span class="btn-label">
+            <span class="btn-text">Record Video</span>
+            <span class="info-icon" id="info-video" data-tooltip="Great for showing the exact steps — download it and attach alongside your ticket.">ⓘ</span>
+          </span>
           <span class="shortcut">new tab</span>
-          <span class="info-icon" id="info-video" data-tooltip="Great for showing the exact steps — download it and attach alongside your ticket.">ⓘ</span>
         </button>
       </div>
 
@@ -1334,9 +1356,11 @@
       <div id="gif-section">
         <button class="btn-capture btn-record" id="btn-gif" style="border-color: var(--accent2); color: #c4b5fd;">
           <span>🎞️</span>
-          Record GIF
+          <span class="btn-label">
+            <span class="btn-text">Record GIF</span>
+            <span class="info-icon" id="info-gif" data-tooltip="Great for showing the exact steps — download it and attach alongside your ticket.">ⓘ</span>
+          </span>
           <span class="shortcut">HD, ~12s clip</span>
-          <span class="info-icon" id="info-gif" data-tooltip="Great for showing the exact steps — download it and attach alongside your ticket.">ⓘ</span>
         </button>
       </div>
     </div>
@@ -1346,6 +1370,7 @@
       <div class="video-frames-info">
         <span id="video-info-text">🎬 Video recorded</span>
         <div style="display: flex; gap: 6px;">
+          <button class="thumb-del btn-view-media" id="btn-view-video" title="View video" aria-label="View video"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
           <button class="thumb-del" id="btn-download-video" title="Download video" style="background: var(--accent); color: #000;">⬇</button>
           <button class="thumb-del" id="btn-delete-video" title="Remove video">✕</button>
         </div>
@@ -1356,6 +1381,7 @@
       <div class="video-frames-info">
         <span id="gif-info-text">🎞️ GIF recorded</span>
         <div style="display: flex; gap: 6px;">
+          <button class="thumb-del btn-view-media" id="btn-view-gif" title="View GIF" aria-label="View GIF"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
           <button class="thumb-del" id="btn-download-gif" title="Download GIF" style="background: var(--accent); color: #000;">⬇</button>
           <button class="thumb-del" id="btn-delete-gif" title="Remove GIF">✕</button>
         </div>
@@ -1484,7 +1510,7 @@
     <div id="result-gif" style="display:none; margin-top: 10px;">
       <div class="section-label" style="margin-bottom: 6px;">GIF Recording</div>
       <div style="margin-bottom: 8px;">
-        <img id="result-gif-player" style="width: 100%; max-height: 200px; border-radius: 4px; background: #000; object-fit: contain; display:block;" alt="GIF recording" />
+        <img id="result-gif-player" title="Click to enlarge" style="width: 100%; max-height: 200px; border-radius: 4px; background: #000; object-fit: contain; display:block; cursor: zoom-in;" alt="GIF recording" />
       </div>
       <div style="display: flex; gap: 6px; margin-top: 8px;">
         <button class="btn-sm" id="btn-result-download-gif" style="flex: 1;">
@@ -1535,6 +1561,7 @@
   <button class="preview-close" id="preview-close">✕</button>
   <button class="preview-nav prev" id="preview-prev">‹</button>
   <img id="preview-image" src="" alt="Preview" />
+  <video id="preview-video" controls playsinline style="display:none;"></video>
   <button class="preview-nav next" id="preview-next">›</button>
   <div class="preview-counter" id="preview-counter">1 / 1</div>
 </div>

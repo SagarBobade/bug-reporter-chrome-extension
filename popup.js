@@ -145,13 +145,135 @@ const btnResultDeleteGif = $("btn-result-delete-gif");
 const noteInputWrap    = $("note-input-wrap");
 const btnClearNote     = $("btn-clear-note");
 
-// ── Auto-resize textarea (for non-note textareas only) ──────────────────────
-function autoResizeTextarea(textarea) {
-  // Skip auto-resize for note input - it now uses fixed height with scrollbar
-  if (textarea.id === 'note-input') return;
+// ── Auto-resize note textarea ────────────────────────────────────────────────
+// Grows with its content (typed or dictated) so the full text is visible, up to
+// NOTE_MAX_ROWS rows; past that it stops growing and scrolls instead.
+const NOTE_MAX_ROWS = 10;
 
-  textarea.style.height = "auto";
-  textarea.style.height = textarea.scrollHeight + "px";
+function resizeNoteInput({ scrollToEnd = false } = {}) {
+  // Hidden (result panel showing) → scrollHeight is 0; re-run when shown again.
+  if (noteInput.offsetParent === null) return;
+
+  const cs = getComputedStyle(noteInput);
+  const lineHeight = parseFloat(cs.lineHeight);
+  const vertical = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  const borders = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  const maxHeight = Math.ceil(lineHeight * NOTE_MAX_ROWS + vertical + borders);
+
+  // Collapse first so scrollHeight reflects the content, not the current height
+  noteInput.style.height = "auto";
+  const contentHeight = noteInput.scrollHeight + borders; // border-box sizing
+  noteInput.style.height = Math.min(contentHeight, maxHeight) + "px";
+  noteInput.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+
+  // Keep the newest dictated words in view once the box has hit its max size
+  if (scrollToEnd) noteInput.scrollTop = noteInput.scrollHeight;
+}
+
+// Refreshes everything that depends on the note's text (size + clear button).
+function syncNoteInput(opts) {
+  updateNoteInputClear();
+  resizeNoteInput(opts);
+}
+
+// ── Typewriter effect for live dictation ─────────────────────────────────────
+// Speech recognition delivers text in bursts and keeps revising its newest words.
+// Rather than jumping, the note trails the transcript by ~TYPE_LAG_MS and reveals
+// it at a speed proportional to how far behind it is: while you talk it flows
+// at roughly your speaking pace instead of dashing out each burst then pausing.
+// Revisions to words already on screen are swapped in place — never erased and
+// retyped — and revisions to words not yet shown are simply never seen.
+const TYPE_LAG_MS = 300;        // how far the display trails speech; higher = slower, smoother
+const TYPE_MIN_CPS = 40;        // floor so the last few characters don't crawl
+const TYPE_FINAL_LAG_MS = 80;   // after Stop: finish the last words quickly…
+const TYPE_FINAL_MIN_CPS = 150; // …at this speed or faster
+const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+const typewriter = {
+  target: "",     // latest transcript we're typing towards
+  written: null,  // value we last wrote — differs if someone else changed the field
+  rafId: null,
+  lastTime: 0,    // timestamp of the previous frame
+  carry: 0,       // fractional characters owed from previous frames
+  lagMs: TYPE_LAG_MS,
+  minCps: TYPE_MIN_CPS,
+};
+
+function isNoteTyping() {
+  return typewriter.rafId !== null;
+}
+
+function cancelNoteTyping() {
+  if (typewriter.rafId !== null) cancelAnimationFrame(typewriter.rafId);
+  typewriter.rafId = null;
+  typewriter.written = null;
+}
+
+// Writes `text` into the note as a transcript update (not a user edit).
+function setNoteFromTranscript(text, { scrollToEnd = true } = {}) {
+  state.isTranscriptUpdate = true;
+  noteInput.value = text;
+  typewriter.written = text;
+  syncNoteInput({ scrollToEnd });
+  state.isTranscriptUpdate = false;
+  updateSteps();
+  updateGenerateBtn();
+}
+
+// Jump straight to the latest transcript (user edit, etc.).
+function flushNoteTyping() {
+  if (!isNoteTyping()) return;
+  cancelNoteTyping();
+  setNoteFromTranscript(typewriter.target);
+}
+
+function typeNoteTo(target, { final = false } = {}) {
+  typewriter.target = target;
+  typewriter.lagMs = final ? TYPE_FINAL_LAG_MS : TYPE_LAG_MS;
+  typewriter.minCps = final ? TYPE_FINAL_MIN_CPS : TYPE_MIN_CPS;
+  if (prefersReducedMotion) {
+    cancelNoteTyping();
+    setNoteFromTranscript(target);
+    return;
+  }
+  if (!isNoteTyping()) {
+    typewriter.written = noteInput.value;
+    typewriter.lastTime = performance.now();
+    typewriter.carry = 0;
+    typewriter.rafId = requestAnimationFrame(typeNoteFrame);
+  }
+}
+
+function typeNoteFrame(now) {
+  // The field was changed by something else (clear, reset, regenerate) — stop
+  // typing so we don't resurrect text the user just removed.
+  if (noteInput.value !== typewriter.written) {
+    cancelNoteTyping();
+    return;
+  }
+
+  const current = noteInput.value;
+  const target = typewriter.target;
+  if (current === target) {
+    typewriter.rafId = null; // caught up — wait for the next transcript update
+    return;
+  }
+
+  const dt = Math.max(0, Math.min(now - typewriter.lastTime, 100)); // clamp tab-switch gaps
+  typewriter.lastTime = now;
+
+  // Characters already on screen stay on screen: if the recognizer revised them,
+  // show the revised characters at the same length (an in-place word swap).
+  const shown = Math.min(current.length, target.length);
+  const backlog = target.length - shown;
+  const cps = Math.max(typewriter.minCps, backlog / (typewriter.lagMs / 1000));
+  typewriter.carry += cps * dt / 1000;
+  const add = Math.min(backlog, Math.floor(typewriter.carry));
+  typewriter.carry -= add;
+
+  const next = target.slice(0, shown + add);
+  if (next !== current) setNoteFromTranscript(next);
+  typewriter.rafId = requestAnimationFrame(typeNoteFrame);
 }
 
 // Buckets are calibrated against this app's typical range: a single-screenshot
@@ -201,10 +323,10 @@ async function showTokenUsage(tokenUsage) {
 }
 
 // Persist session ───────────────────────────────────────────────────────────
-function saveSession(includeResult = false) {
+function saveSession(includeResult = false, noteOverride = null) {
   const data = {
     screenshots: state.screenshots,
-    note:        noteInput.value,
+    note:        noteOverride ?? noteInput.value,
     component:   fieldComp.value,
     severity:    fieldSev.value,
     videoBlobUrl: state.videoBlobUrl, // Persist video URL
@@ -249,13 +371,8 @@ async function restoreSession() {
           if (videoPreview) {
             videoPreview.style.display = "block";
             btnRecord.style.display = "none";
-            videoInfoText.textContent = "🎬 Video recorded (download to attach)";
+            videoInfoText.textContent = "🎬 Video recorded (view or download to attach)";
           }
-        }
-
-        // Auto-resize textarea if note was restored
-        if (noteInput.value) {
-          // Note: no auto-resize for note input - uses scrollbar instead
         }
 
         // Restore generated result if exists
@@ -508,9 +625,20 @@ async function init() {
     chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
   });
 
+  // A keystroke during the typing animation: finish revealing the transcript first
+  // so the edit applies to the full text (and the animation can't overwrite it).
+  // Keep the caret where the user put it, unless it was at the end of the
+  // partially typed text — then they're appending, so move it to the new end.
+  noteInput.addEventListener("beforeinput", () => {
+    if (!isNoteTyping()) return;
+    const { selectionStart, selectionEnd, value } = noteInput;
+    const caretAtEnd = selectionStart === value.length && selectionEnd === value.length;
+    flushNoteTyping();
+    if (!caretAtEnd) noteInput.setSelectionRange(selectionStart, selectionEnd);
+  });
+
   noteInput.addEventListener("input",  () => {
-    // Note: no auto-resize for note input - uses scrollbar instead
-    updateSteps(); updateGenerateBtn(); saveSession(); updateNoteInputClear();
+    updateSteps(); updateGenerateBtn(); saveSession(); syncNoteInput();
     // Sync manual edits back to content script so speech appends to edited text
     if (state.isListening && !state.isTranscriptUpdate) {
       syncTranscriptToContentScript();
@@ -521,17 +649,20 @@ async function init() {
 
   // Clear note button
   btnClearNote.addEventListener("click", () => {
+    cancelNoteTyping();
     noteInput.value = "";
-    noteInput.style.height = "auto";
-    updateNoteInputClear();
+    syncNoteInput();
+    // While dictating, reset the recognizer's text too — otherwise the next
+    // transcript update would bring the cleared text straight back.
+    if (state.isListening) syncTranscriptToContentScript();
     updateSteps();
     updateGenerateBtn();
     saveSession();
     noteInput.focus();
   });
 
-  // Initial state for clear button
-  updateNoteInputClear();
+  // Initial size + clear button for restored note text
+  syncNoteInput();
 
   setupSpeechRecognition();
   renderGrid();
@@ -570,31 +701,31 @@ function setupSpeechRecognition() {
   // Listen for messages from content script
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "MIC_STATE") {
-      // Note: content.js auto-restarts recognition across silence gaps, so this
-      // message can toggle false→true rapidly even while the user is still
-      // "recording" from their perspective — the mic timer is driven by the
-      // button click instead, not by this message, so it stays continuous.
+      // Note: content.js auto-restarts recognition across silence gaps — each restart
+      // re-sends listening:true (startMicTimer ignores it while running), but
+      // listening:false is only sent on a real stop, so the timer stays continuous.
       state.isListening = msg.listening;
       if (msg.listening) {
         btnMic.classList.add("recording");
         btnMic.textContent = "⏹️";
         btnMic.title = "Stop recording";
+        startMicTimer(); // no-op if already running; covers starts via keyboard shortcut
       } else {
         btnMic.classList.remove("recording");
         btnMic.textContent = "🎙️";
         btnMic.title = "Record voice note";
+        stopMicTimer(); // covers stops via keyboard shortcut
       }
     }
 
     if (msg.type === "MIC_TRANSCRIPT") {
-      state.isTranscriptUpdate = true;
-      noteInput.value = msg.text;
-      updateNoteInputClear();
-      state.isTranscriptUpdate = false;
-      updateSteps();
-      updateGenerateBtn();
       if (msg.isFinal) {
-        saveSession();
+        // Recording stopped — finish the last words quickly, but persist the
+        // complete text right away in case the popup closes mid-animation.
+        typeNoteTo(msg.text, { final: true });
+        saveSession(false, msg.text);
+      } else {
+        typeNoteTo(msg.text);
       }
     }
 
@@ -732,15 +863,8 @@ function renderGrid() {
     screenshotGrid.appendChild(thumb);
   });
 
-  // Show max 3 empty placeholders (to avoid scrollbar)
-  const emptyCount = Math.min(3, MAX_SCREENSHOTS - state.screenshots.length);
-  for (let i = 0; i < emptyCount; i++) {
-    const empty = document.createElement("div");
-    empty.className = "screenshot-empty";
-    empty.textContent = "🖼️";
-    screenshotGrid.appendChild(empty);
-  }
-
+  // No screenshots → hide the whole section (heading + empty placeholders)
+  $("screenshots-section").style.display = state.screenshots.length > 0 ? "block" : "none";
   shotCount.style.display = state.screenshots.length > 0 ? "inline-flex" : "none";
   shotCount.textContent = state.screenshots.length;
   btnClearAll.style.display = state.screenshots.length > 1 ? "inline-block" : "none";
@@ -864,6 +988,18 @@ btnCapture.addEventListener("click", async () => {
   }
 });
 
+// Screenshot taken via keyboard shortcut while the popup is open — background hands
+// it over instead of writing storage, so this popup's in-memory session stays authoritative.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type !== "SHORTCUT_SCREENSHOT" || !msg.dataUrl) return;
+  if (state.screenshots.length >= MAX_SCREENSHOTS) {
+    showError(`Max ${MAX_SCREENSHOTS} screenshots. Remove one first.`); return;
+  }
+  state.screenshots.push(msg.dataUrl);
+  saveSession(); renderGrid(); updateGenerateBtn(); clearError();
+  showToast("Screenshot captured (shortcut)", "success");
+});
+
 // ── Capture & Annotate ────────────────────────────────────────────────────────
 btnAnnotate.addEventListener("click", async () => {
   if (state.screenshots.length >= MAX_SCREENSHOTS) {
@@ -947,6 +1083,14 @@ uploadInput.addEventListener("change", async () => {
   saveSession(); renderGrid(); updateGenerateBtn(); clearError();
 });
 
+// Record buttons keep their icon and ⓘ hint; status changes only swap the label
+// text (rewriting innerHTML would delete the ⓘ and its click-swallow listener).
+function setButtonText(btn, text) {
+  const label = btn.querySelector(".btn-text");
+  if (label) label.textContent = text;
+  else btn.textContent = text;
+}
+
 // ── Video Recording ───────────────────────────────────────────────────────────
 const VIDEO_RECORDING_KEY = "bugReporterVideoRecording";
 
@@ -960,7 +1104,7 @@ btnRecord.addEventListener("click", async () => {
   }
 
   btnRecord.disabled = true;
-  btnRecord.textContent = "Opening recorder...";
+  setButtonText(btnRecord, "Opening recorder...");
 
   // Get capture delay to pass to recorder
   const delay = await getCaptureDelay();
@@ -980,7 +1124,7 @@ btnRecord.addEventListener("click", async () => {
     
     // Reset button state
     btnRecord.disabled = false;
-    btnRecord.innerHTML = `<span>🎬</span> Record Video`;
+    setButtonText(btnRecord, "Record Video");
   });
 });
 
@@ -1003,7 +1147,7 @@ async function checkVideoRecording() {
         // Show video preview (video is NOT sent to AI - only for download)
         videoPreview.style.display = "block";
         btnRecord.style.display = "none";
-        videoInfoText.textContent = "🎬 Video recorded (download to attach)";
+        videoInfoText.textContent = "🎬 Video recorded (view or download to attach)";
 
         // Add transcript to notes if available and not already added
         if (data.transcript && data.transcript.trim() && !data.transcriptAdded) {
@@ -1033,6 +1177,15 @@ async function checkVideoRecording() {
     });
   });
 }
+
+// View video in the preview modal — no download needed to check the recording
+$("btn-view-video").addEventListener("click", () => {
+  if (!state.videoBlobUrl) {
+    showToast("No video available to view", "error");
+    return;
+  }
+  showMediaPreview(state.videoBlobUrl, "Video recording", "video");
+});
 
 // Download video
 btnDownloadVideo.addEventListener("click", () => {
@@ -1107,11 +1260,11 @@ btnGif.addEventListener("click", async () => {
   }
 
   btnGif.disabled = true;
-  btnGif.textContent = "Starting GIF recording...";
+  setButtonText(btnGif, "Starting GIF recording...");
 
   chrome.runtime.sendMessage({ type: "START_GIF_RECORDING", tabId: currentTab.id }, (res) => {
     btnGif.disabled = false;
-    btnGif.innerHTML = `<span>🎞️</span> Record GIF`;
+    setButtonText(btnGif, "Record GIF");
 
     if (!res || !res.ok) {
       showError("Failed to start GIF recording: " + (res && res.error ? res.error : "Unknown error"));
@@ -1148,7 +1301,7 @@ async function checkGifRecording() {
         // Show GIF preview (GIF is NOT sent to AI - only for download)
         gifPreview.style.display = "block";
         btnGif.style.display = "none";
-        gifInfoText.textContent = "🎞️ GIF recorded (download to attach)";
+        gifInfoText.textContent = "🎞️ GIF recorded (view or download to attach)";
 
         showToast("GIF ready for download!", "success");
         resolve();
@@ -1160,16 +1313,16 @@ async function checkGifRecording() {
         if (isStuck) {
           chrome.storage.local.remove(GIF_RECORDING_KEY);
           btnGif.disabled = false;
-          btnGif.innerHTML = `<span>🎞️</span> Record GIF`;
+          setButtonText(btnGif, "Record GIF");
           showToast("Previous GIF recording got stuck and was reset — try again.", "warning");
           resolve();
           return;
         }
 
         btnGif.disabled = true;
-        btnGif.innerHTML = data.rendering
-          ? `<span>🎞️</span> Rendering GIF… please wait`
-          : `<span>🎞️</span> Recording GIF… (use on-page control to stop)`;
+        setButtonText(btnGif, data.rendering
+          ? "Rendering GIF… please wait"
+          : "Recording GIF… (use on-page control to stop)");
         resolve();
         return;
       }
@@ -1177,7 +1330,7 @@ async function checkGifRecording() {
       if (data && data.error) {
         chrome.storage.local.remove(GIF_RECORDING_KEY);
         btnGif.disabled = false;
-        btnGif.innerHTML = `<span>🎞️</span> Record GIF`;
+        setButtonText(btnGif, "Record GIF");
         showError("GIF recording failed: " + data.error);
       }
 
@@ -1192,13 +1345,25 @@ chrome.runtime.onMessage.addListener((msg) => {
     checkGifRecording();
   } else if (msg.type === "GIF_RECORDING_RENDERING") {
     btnGif.disabled = true;
-    btnGif.innerHTML = `<span>🎞️</span> Rendering GIF… please wait`;
+    setButtonText(btnGif, "Rendering GIF… please wait");
   } else if (msg.type === "GIF_RECORDING_ERROR") {
     btnGif.disabled = false;
-    btnGif.innerHTML = `<span>🎞️</span> Record GIF`;
+    setButtonText(btnGif, "Record GIF");
     showError("GIF recording failed: " + (msg.error || "Unknown error"));
   }
 });
+
+// View GIF in the preview modal — no download needed to check what was captured
+function viewGif() {
+  if (!state.gifBlobUrl) {
+    showToast("No GIF available to view", "error");
+    return;
+  }
+  showMediaPreview(state.gifBlobUrl, "GIF recording");
+}
+
+$("btn-view-gif").addEventListener("click", viewGif);
+resultGifPlayer.addEventListener("click", viewGif);
 
 // Download GIF
 btnDownloadGif.addEventListener("click", () => {
@@ -1704,6 +1869,7 @@ btnCopy.addEventListener("click", async () => {
 btnRegen.addEventListener("click", () => {
   resultPanel.classList.remove("visible");
   capturePanel.style.display = "block";
+  resizeNoteInput(); // was hidden while the result panel showed, so re-measure
   inputEditSection.classList.remove("expanded");
   btnGenerate.click();
 });
@@ -1714,52 +1880,29 @@ inputEditToggle.addEventListener("click", () => {
 });
 
 // ── Regenerate from Edit Section ──────────────────────────────────────────────
-btnRegenEdit.addEventListener("click", async () => {
-  if (state.screenshots.length === 0) return;
+// Generation is asynchronous (GENERATE_TICKET replies with a generationId, and the
+// ticket arrives later via GENERATION_COMPLETE/polling), so rather than awaiting a
+// ticket here, copy the edited inputs into the main form and reuse the same
+// generate path as the "↺ redo" button — loading bar, cancel, and background
+// completion while the popup is closed all keep working.
+btnRegenEdit.addEventListener("click", () => {
+  const hasScreenshots = state.screenshots.length > 0;
+  const hasNotes = editNote.value.trim().length > 0;
+  if (!hasScreenshots && !hasNotes) {
+    showToast("Add a description or screenshot first", "error");
+    return;
+  }
 
   // Update main inputs from edit fields
   noteInput.value = editNote.value;
   fieldComp.value = editComponent.value;
   fieldSev.value = editSeverity.value;
   saveSession();
+  updateNoteInputClear();
+  updateGenerateBtn();
+  // Capture panel is hidden here; btnRegen re-shows it and resizes the note
 
-  // Show loading state
-  btnRegenEdit.disabled = true;
-  btnRegenEdit.innerHTML = `<span>⏳</span> Regenerating…`;
-
-  const fullNote = [
-    editNote.value.trim(),
-    state.enabledFields.includes("component") && editComponent.value.trim() ? `Component/Area: ${editComponent.value.trim()}` : "",
-    state.enabledFields.includes("severity") ? `Severity: ${editSeverity.value}` : ""
-  ].filter(Boolean).join("\n");
-
-  const screenInfo = `${window.screen.width}x${window.screen.height} (viewport: ${window.innerWidth}x${window.innerHeight})`;
-
-  try {
-    const res = await chrome.runtime.sendMessage({
-      type: "GENERATE_TICKET",
-      payload: {
-        screenshots: state.screenshots,
-        audioNote: fullNote,
-        pageUrl: state.pageUrl,
-        pageTitle: state.pageTitle,
-        screenInfo
-      }
-    });
-    if (res?.ok) {
-      resultTextarea.value = res.ticket;
-      saveResult();
-      inputEditSection.classList.remove("expanded");
-      showToast("Ticket regenerated!", "success");
-    } else {
-      showToast("Error: " + (res?.error || "Failed to regenerate"), "error");
-    }
-  } catch (e) {
-    showToast("Error: " + e.message, "error");
-  } finally {
-    btnRegenEdit.disabled = false;
-    btnRegenEdit.innerHTML = `<span>✨</span> Regenerate Ticket`;
-  }
+  btnRegen.click();
 });
 
 btnReset.addEventListener("click", async () => {
@@ -1789,6 +1932,7 @@ btnReset.addEventListener("click", async () => {
   clearSession();
   resultPanel.classList.remove("visible");
   capturePanel.style.display = "block";
+  syncNoteInput(); // shrink back to empty size + hide clear button
   $("result-screenshots").style.display = "none";
   if (resultVideo) resultVideo.style.display = "none";
   if (resultGif) resultGif.style.display = "none";
@@ -1904,8 +2048,60 @@ let previewIndex = 0;
 function showPreview(index) {
   if (state.screenshots.length === 0) return;
   previewIndex = index;
+  $("preview-modal").classList.remove("single");
+  showPreviewElement("image");
   updatePreview();
   $("preview-modal").classList.add("visible");
+}
+
+// Show one standalone item (the recorded GIF or video) in the same modal — no
+// prev/next navigation, and the counter slot shows a caption instead.
+function showMediaPreview(src, caption, kind = "image") {
+  $("preview-modal").classList.add("single");
+  showPreviewElement(kind);
+  $("preview-counter").textContent = caption;
+  if (kind === "video") {
+    const video = $("preview-video");
+    video.src = src;
+    video.currentTime = 0;
+    video.play().catch(() => { /* autoplay blocked or not ready — controls still work */ });
+  } else {
+    $("preview-image").src = src;
+    $("preview-image").alt = caption;
+  }
+  $("preview-modal").classList.add("visible");
+}
+
+// Only one of <img>/<video> is shown at a time; hiding the video also stops it.
+function showPreviewElement(kind) {
+  $("preview-image").style.display = kind === "image" ? "" : "none";
+  $("preview-video").style.display = kind === "video" ? "" : "none";
+  if (kind !== "video") stopPreviewVideo();
+}
+
+function stopPreviewVideo() {
+  const video = $("preview-video");
+  video.pause();
+  // Drop the source so audio can't keep playing behind the popup after closing
+  video.removeAttribute("src");
+  video.load();
+}
+
+// Every close path (✕, Esc, backdrop) goes through here so video always stops.
+function closePreview() {
+  $("preview-modal").classList.remove("visible");
+  stopPreviewVideo();
+}
+
+$("preview-video").addEventListener("error", () => {
+  // Ignore the (async) error fired by load() after stopPreviewVideo() removed src
+  if (!$("preview-video").getAttribute("src")) return;
+  closePreview();
+  showToast("Couldn't play the video — try downloading it instead", "error");
+});
+
+function isSinglePreview() {
+  return $("preview-modal").classList.contains("single");
 }
 
 function updatePreview() {
@@ -1914,23 +2110,21 @@ function updatePreview() {
 }
 
 $("preview-modal").addEventListener("click", (e) => {
-  if (e.target === $("preview-modal")) {
-    $("preview-modal").classList.remove("visible");
-  }
+  if (e.target === $("preview-modal")) closePreview();
 });
 
-$("preview-close").addEventListener("click", () => {
-  $("preview-modal").classList.remove("visible");
-});
+$("preview-close").addEventListener("click", closePreview);
 
 $("preview-prev").addEventListener("click", (e) => {
   e.stopPropagation();
+  if (isSinglePreview()) return; // arrow keys still call .click() on the hidden buttons
   previewIndex = (previewIndex - 1 + state.screenshots.length) % state.screenshots.length;
   updatePreview();
 });
 
 $("preview-next").addEventListener("click", (e) => {
   e.stopPropagation();
+  if (isSinglePreview()) return;
   previewIndex = (previewIndex + 1) % state.screenshots.length;
   updatePreview();
 });
@@ -1938,7 +2132,7 @@ $("preview-next").addEventListener("click", (e) => {
 // Keyboard navigation for preview
 document.addEventListener("keydown", (e) => {
   if ($("preview-modal").classList.contains("visible")) {
-    if (e.key === "Escape") $("preview-modal").classList.remove("visible");
+    if (e.key === "Escape") closePreview();
     if (e.key === "ArrowLeft") $("preview-prev").click();
     if (e.key === "ArrowRight") $("preview-next").click();
   }
@@ -1962,6 +2156,10 @@ btnImprove.addEventListener("click", async () => {
   if (!feedback) return;
   if (!resultTextarea.value) return;
 
+  // Snapshot history *before* adding this message — background sends `feedback`
+  // separately as NEW FEEDBACK, so including it here would duplicate it in the prompt.
+  const priorHistory = state.chatHistory.slice();
+
   // Add user message to chat
   state.chatHistory.push({ role: "user", content: feedback });
   renderChatHistory();
@@ -1978,7 +2176,7 @@ btnImprove.addEventListener("click", async () => {
       payload: {
         currentTicket: resultTextarea.value,
         feedback,
-        chatHistory: state.chatHistory,
+        chatHistory: priorHistory,
         screenshots: state.screenshots
       }
     });

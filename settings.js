@@ -16,6 +16,7 @@ const DEFAULT_SECTIONS = [
 ];
 
 const AI_PROVIDERS = ["gemini", "openai", "anthropic", "xai"];
+const DEFAULT_VOICE_LANGUAGE = "en-US";
 
 const $ = id => document.getElementById(id);
 let customSections = [];
@@ -32,6 +33,9 @@ async function loadSettings() {
 
 async function init() {
   const s = await loadSettings();
+
+  // Voice language (speech recognition locale) — defaults to the previous hard-coded en-US
+  $("voiceLanguage").value = s.voiceLanguage || DEFAULT_VOICE_LANGUAGE;
 
   // AI Provider
   const aiProvider = s.aiProvider || "gemini";
@@ -372,6 +376,7 @@ $("btn-save").addEventListener("click", async () => {
 
   const settings = {
     aiProvider:           aiProvider,
+    voiceLanguage:        $("voiceLanguage").value,
     geminiApiKey:         $("geminiApiKey").value.trim(),
     openaiApiKey:         $("openaiApiKey").value.trim(),
     anthropicApiKey:      $("anthropicApiKey").value.trim(),
@@ -425,6 +430,7 @@ function setDirty(dirty) {
 $("btn-export").addEventListener("click", () => {
   const settings = {
     aiProvider:           $("aiProvider").value,
+    voiceLanguage:        $("voiceLanguage").value,
     domainContext:        $("domainContext").value.trim(),
     techStack:            $("techStack").value.trim(),
     summaryFormat:        $("summaryFormat").value.trim(),
@@ -478,6 +484,10 @@ $("import-file").addEventListener("change", async (e) => {
     }
 
     // Apply imported settings to form
+    // Only accept a language this page offers, so a bad file can't leave the select blank
+    if (settings.voiceLanguage && [...$("voiceLanguage").options].some(o => o.value === settings.voiceLanguage)) {
+      $("voiceLanguage").value = settings.voiceLanguage;
+    }
     if (settings.aiProvider) {
       $("aiProvider").value = settings.aiProvider;
       showApiKeySection(settings.aiProvider);

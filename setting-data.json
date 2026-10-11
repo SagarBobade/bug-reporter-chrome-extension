@@ -1,5 +1,6 @@
 {
   "aiProvider": "gemini",
+  "voiceLanguage": "en-US",
   "domainContext": "Product for companies which produces and manage Movie, Drama, Documentaries from Planning to Release.",
   "techStack": "Typescript, React, Go, Mongo DB.",
   "summaryFormat": "[Module]: [Feature/Component]: [Issue description]",

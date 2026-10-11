@@ -159,6 +159,115 @@ class RectAnnotation extends Annotation {
   }
 }
 
+// Box-based shapes that stretch from any corner *or edge*. Edge handles let a
+// circle be pulled into an oval along one axis only. Geometry is kept
+// normalized (x/y = top-left, positive width/height).
+class BoxShapeAnnotation extends RectAnnotation {
+  constructor(type, x, y, width, height, color, lineWidth) {
+    super(x, y, width, height, color, lineWidth);
+    this.type = type;
+    this.normalize();
+  }
+
+  normalize() {
+    const b = this.getBounds();
+    this.x = b.x; this.y = b.y; this.width = b.width; this.height = b.height;
+  }
+
+  getResizeHandles() {
+    const { x, y, width: w, height: h } = this.getBounds();
+    return [
+      { x, y, type: 'nw' }, { x: x + w, y, type: 'ne' },
+      { x, y: y + h, type: 'sw' }, { x: x + w, y: y + h, type: 'se' },
+      { x: x + w / 2, y, type: 'n' }, { x: x + w / 2, y: y + h, type: 's' },
+      { x, y: y + h / 2, type: 'w' }, { x: x + w, y: y + h / 2, type: 'e' },
+    ];
+  }
+
+  resize(handle, deltaX, deltaY) {
+    let left = this.x, top = this.y, right = this.x + this.width, bottom = this.y + this.height;
+    const t = handle.type;
+    if (t.includes('w')) left += deltaX;
+    if (t.includes('e')) right += deltaX;
+    if (t.includes('n')) top += deltaY;
+    if (t.includes('s')) bottom += deltaY;
+
+    // Dragged past the opposite edge: flip, and keep the handle on the edge
+    // being dragged (handle is state.resizeHandle, reused for the whole drag).
+    if (left > right) {
+      [left, right] = [right, left];
+      handle.type = handle.type.replace(/[we]/, c => (c === 'w' ? 'e' : 'w'));
+    }
+    if (top > bottom) {
+      [top, bottom] = [bottom, top];
+      handle.type = handle.type.replace(/[ns]/, c => (c === 'n' ? 's' : 'n'));
+    }
+    this.x = left; this.y = top; this.width = right - left; this.height = bottom - top;
+  }
+}
+
+class RoundRectAnnotation extends BoxShapeAnnotation {
+  constructor(x, y, width, height, color, lineWidth) {
+    super('roundrect', x, y, width, height, color, lineWidth);
+  }
+
+  // Corner radius scales with the box but is capped, so large boxes keep
+  // gently rounded corners instead of turning into pills.
+  getRadius() {
+    const { width, height } = this.getBounds();
+    return Math.min(Math.min(width, height) / 4, Math.max(16, this.lineWidth * 4));
+  }
+
+  draw(ctx) {
+    const b = this.getBounds();
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = this.lineWidth;
+    ctx.beginPath();
+    ctx.roundRect(b.x, b.y, b.width, b.height, this.getRadius());
+    ctx.stroke();
+  }
+}
+
+class EllipseAnnotation extends BoxShapeAnnotation {
+  constructor(x, y, width, height, color, lineWidth) {
+    super('ellipse', x, y, width, height, color, lineWidth);
+  }
+
+  draw(ctx) {
+    const b = this.getBounds();
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = this.lineWidth;
+    ctx.beginPath();
+    ctx.ellipse(b.x + b.width / 2, b.y + b.height / 2, b.width / 2, b.height / 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Clickable area is the oval itself (plus the stroke), not its bounding box,
+  // so clicking just outside an oval's curve doesn't grab it.
+  isPointInside(x, y) {
+    const b = this.getBounds();
+    const rx = b.width / 2 + this.lineWidth, ry = b.height / 2 + this.lineWidth;
+    const dx = (x - (b.x + b.width / 2)) / rx, dy = (y - (b.y + b.height / 2)) / ry;
+    return dx * dx + dy * dy <= 1;
+  }
+}
+
+// Builds the box shape for a drag from (x1,y1) to (x2,y2). The circle tool
+// always starts as a perfect circle (size = larger drag axis); its handles then
+// stretch it into an oval.
+function createBoxShape(tool, x1, y1, x2, y2, color, lineWidth) {
+  let w = x2 - x1, h = y2 - y1;
+  if (tool === "ellipse") {
+    const size = Math.max(Math.abs(w), Math.abs(h));
+    w = (w < 0 ? -1 : 1) * size;
+    h = (h < 0 ? -1 : 1) * size;
+    return new EllipseAnnotation(x1, y1, w, h, color, lineWidth);
+  }
+  return new RoundRectAnnotation(x1, y1, w, h, color, lineWidth);
+}
+
+const BOX_SHAPE_TOOLS = ["roundrect", "ellipse"];
+
 class ArrowAnnotation extends Annotation {
   constructor(x1, y1, x2, y2, color, lineWidth) {
     super('arrow', x1, y1, color, lineWidth);
@@ -531,6 +640,10 @@ function restoreAnnotationsFromHistory(historyData) {
     let annotation;
     if (data.type === 'rect') {
       annotation = new RectAnnotation(data.x, data.y, data.width, data.height, data.color, data.lineWidth);
+    } else if (data.type === 'roundrect') {
+      annotation = new RoundRectAnnotation(data.x, data.y, data.width, data.height, data.color, data.lineWidth);
+    } else if (data.type === 'ellipse') {
+      annotation = new EllipseAnnotation(data.x, data.y, data.width, data.height, data.color, data.lineWidth);
     } else if (data.type === 'arrow') {
       annotation = new ArrowAnnotation(data.x, data.y, data.x2, data.y2, data.color, data.lineWidth);
     } else if (data.type === 'drawing') {
@@ -711,6 +824,10 @@ function updateCursor() {
       'ne': 'ne-resize',
       'sw': 'sw-resize',
       'se': 'se-resize',
+      'n': 'ns-resize',
+      's': 'ns-resize',
+      'e': 'ew-resize',
+      'w': 'ew-resize',
       'start': 'crosshair',
       'end': 'crosshair',
       'font': 'nwse-resize'
@@ -731,6 +848,8 @@ function updateInstructions() {
     line: "Click and drag to draw a straight line",
     arrow: "Click and drag to draw an arrow (hold Shift to snap to 45°). Click an arrow to select it, then drag either end to reposition it.",
     rect: "Click and drag to draw a rectangle. Click rectangles to select, move, or resize them.",
+    roundrect: "Click and drag to draw a rounded rectangle",
+    ellipse: "Click and drag to draw a circle — drag its edge handles to stretch it into an oval",
     circle: "Click and drag to draw a circle",
     highlight: "Click and drag to highlight an area (semi-transparent)",
     blur: "Click and drag to blur/pixelate an area for privacy",
@@ -744,6 +863,8 @@ function updateInstructions() {
       instruction += " • Press Enter to commit • Delete to remove • Drag to move • Drag corner to resize • Double-click to edit text";
     } else if (state.selectedAnnotation.type === 'arrow') {
       instruction += " • Press Enter to commit • Delete to remove • Drag to move • Drag either end to reposition it";
+    } else if (state.selectedAnnotation instanceof BoxShapeAnnotation) {
+      instruction += " • Enter to commit • Delete to remove • Drag to move • Drag corners/edges to resize";
     } else {
       instruction += " • Press Enter to commit • Delete to remove • Drag to move • Drag corners to resize";
     }
@@ -838,7 +959,7 @@ function handleMouseDown(e) {
   // Only start drawing new shapes with specific tools
   if (state.currentTool !== 'draw' && state.currentTool !== 'highlight' && 
       state.currentTool !== 'rect' && state.currentTool !== 'arrow' && 
-      state.currentTool !== 'text') {
+      state.currentTool !== 'text' && !BOX_SHAPE_TOOLS.includes(state.currentTool)) {
     return;
   }
 
@@ -1021,6 +1142,12 @@ function handleMouseMove(e) {
     return;
   }
 
+  if (BOX_SHAPE_TOOLS.includes(state.currentTool)) {
+    redrawCanvas();
+    createBoxShape(state.currentTool, state.startX, state.startY, coords.x, coords.y, state.color, state.lineWidth).draw(ctx);
+    return;
+  }
+
   if (state.currentTool === "rect" || state.currentTool === "arrow") {
     // Live preview while dragging out a new shape — previously the shape was
     // invisible until mouseup, so you were drawing "blind."
@@ -1083,6 +1210,17 @@ function handleMouseUp(e) {
       selectAnnotation(rectAnnotation);
       redrawCanvas();
       saveHistory();
+    }
+  } else if (BOX_SHAPE_TOOLS.includes(state.currentTool)) {
+    const shape = createBoxShape(state.currentTool, state.startX, state.startY, coords.x, coords.y, state.color, state.lineWidth);
+    // A plain click with no real drag would make an invisible zero-size shape
+    if (shape.width > 5 || shape.height > 5) {
+      state.annotations.push(shape);
+      selectAnnotation(shape);
+      redrawCanvas();
+      saveHistory();
+    } else {
+      redrawCanvas();
     }
   } else if (state.currentTool === "arrow") {
     let endX = coords.x, endY = coords.y;

@@ -17,6 +17,9 @@ let targetTabId = null;
 let isPaused = false;
 let recordingMimeType = "video/webm";
 let recordingExtension = "webm";
+let recordingStream = null; // combined (video + mixed audio) stream fed to MediaRecorder
+let isRestarting = false;   // true while the old recorder stops so a fresh one can start
+let finalTranscript = "";   // module-level so restart can reset it
 
 // MP4 (H.264) MediaRecorder support varies by Chrome version/platform — prefer it when
 // available so recordings are directly usable without a separate conversion step, but
@@ -69,6 +72,7 @@ async function init() {
   const webcamPosition = settingsData.webcamPosition || "bottom-right";
   const webcamSize = settingsData.webcamSize || 20;
   const recordingQuality = settingsData.recordingQuality || 720;
+  const voiceLanguage = settingsData.voiceLanguage || "en-US";
 
   try {
     // First, request screen capture - this shows the selection dialog
@@ -142,41 +146,15 @@ async function init() {
       ]);
 
       // Start speech recognition for transcription
-      startSpeechRecognition();
+      startSpeechRecognition(voiceLanguage);
     }
 
     // Start recording
     const picked = pickRecordingMimeType();
     recordingMimeType = picked.mimeType;
     recordingExtension = picked.extension;
-    mediaRecorder = new MediaRecorder(combinedStream, {
-      mimeType: recordingMimeType
-    });
-
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) {
-        recordedChunks.push(e.data);
-      }
-    };
-
-    mediaRecorder.onstop = () => {
-      if (recognition) {
-        recognition.stop();
-      }
-      if (compositeInterval) {
-        clearInterval(compositeInterval);
-      }
-      if (webcamStream) {
-        webcamStream.getTracks().forEach(track => track.stop());
-      }
-      // Clean up hidden video elements used for compositing
-      document.querySelectorAll("video[style*='display: none']").forEach(v => v.remove());
-      removeFloatingControls();
-      showCompletedState();
-    };
-
-    mediaRecorder.start(1000);
-    recordingStartTime = Date.now();
+    recordingStream = combinedStream;
+    startMediaRecorder();
 
     // Update storage state
     chrome.storage.local.set({
@@ -210,6 +188,53 @@ async function init() {
       window.close();
     }
   }
+}
+
+// Creates a MediaRecorder on the live recording stream and starts it. Used for the
+// initial start and for restart — a restart needs a brand-new recorder because the
+// first chunk of a recording carries the container header (WebM EBML / MP4 init
+// segment); dropping it mid-recording would leave an unplayable file.
+function startMediaRecorder() {
+  const recorder = new MediaRecorder(recordingStream, {
+    mimeType: recordingMimeType
+  });
+
+  recorder.ondataavailable = (e) => {
+    if (e.data.size > 0) {
+      recordedChunks.push(e.data);
+    }
+  };
+
+  recorder.onstop = () => {
+    if (isRestarting) {
+      // Discard everything from the old recorder (its final chunk has already been
+      // delivered by now) and record afresh on the same stream
+      isRestarting = false;
+      recordedChunks = [];
+      transcript = "";
+      finalTranscript = "";
+      startMediaRecorder();
+      return;
+    }
+
+    if (recognition) {
+      recognition.stop();
+    }
+    if (compositeInterval) {
+      clearInterval(compositeInterval);
+    }
+    if (webcamStream) {
+      webcamStream.getTracks().forEach(track => track.stop());
+    }
+    // Clean up hidden video elements used for compositing
+    document.querySelectorAll("video[style*='display: none']").forEach(v => v.remove());
+    removeFloatingControls();
+    showCompletedState();
+  };
+
+  mediaRecorder = recorder;
+  recorder.start(1000);
+  recordingStartTime = Date.now();
 }
 
 // Show countdown overlay on the selected screen
@@ -512,14 +537,15 @@ function handleControlMessage(msg, sender, sendResponse) {
 
 // Restart recording
 function restartRecording() {
-  recordedChunks = [];
-  transcript = "";
-  recordingStartTime = Date.now();
-  isPaused = false;
+  if (!mediaRecorder || mediaRecorder.state === "inactive" || isRestarting) return;
 
-  if (mediaRecorder && mediaRecorder.state === "paused") {
-    mediaRecorder.resume();
-  }
+  // Stop the current recorder; its onstop sees isRestarting, clears the old chunks
+  // and transcript, and starts a fresh recorder (with a valid header) on the same stream.
+  isRestarting = true;
+  isPaused = false;
+  mediaRecorder.stop();
+  recordingStartTime = Date.now();
+  timer.textContent = "00:00";
 
   recordingDot.style.animation = "";
   recordingDot.style.background = "";
@@ -527,7 +553,7 @@ function restartRecording() {
 }
 
 // Speech recognition for voice transcription
-function startSpeechRecognition() {
+function startSpeechRecognition(lang = "en-US") {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) {
     console.warn("Speech recognition not supported");
@@ -537,9 +563,9 @@ function startSpeechRecognition() {
   recognition = new SR();
   recognition.continuous = true;
   recognition.interimResults = true;
-  recognition.lang = "en-US";
+  recognition.lang = lang;
 
-  let finalTranscript = "";
+  finalTranscript = "";
 
   recognition.onresult = (event) => {
     let interim = "";
@@ -548,7 +574,9 @@ function startSpeechRecognition() {
       if (event.results[i].isFinal) {
         finalTranscript += t + " ";
       } else {
-        interim = t;
+        // Fast speech yields several interim segments at once — keep them all,
+        // not just the last, or unconfirmed words vanish and reappear each update.
+        interim += t;
       }
     }
     transcript = (finalTranscript + interim).trim();
@@ -566,8 +594,8 @@ function startSpeechRecognition() {
   };
 
   recognition.onend = () => {
-    // Restart if still recording
-    if (mediaRecorder && mediaRecorder.state === "recording") {
+    // Restart if still recording (including the brief gap while a restart swaps recorders)
+    if (mediaRecorder && (mediaRecorder.state === "recording" || isRestarting)) {
       try {
         recognition.start();
       } catch (e) { /* ignore */ }
@@ -590,6 +618,9 @@ function updateTimer() {
 }
 
 function stopRecording() {
+  // A stop during a pending restart wins: the old recorder's onstop then finalizes
+  // normally instead of spinning up a new recorder on a stream we're about to end.
+  isRestarting = false;
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     mediaRecorder.stop();
   }
