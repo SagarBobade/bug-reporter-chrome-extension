@@ -61,13 +61,14 @@ const GENERATION_STATE_KEY = "bugReporterGenerationState";
 const USAGE_STATS_KEY = "bugReporterUsageStats";
 
 // ── Session usage tracking ────────────────────────────────────────────────────
-async function recordUsage(tokenUsage) {
+// countTicket=false adds the tokens without counting a ticket (e.g. note refinement).
+async function recordUsage(tokenUsage, { countTicket = true } = {}) {
   if (!tokenUsage?.total) return;
   return new Promise((resolve) => {
     chrome.storage.local.get(USAGE_STATS_KEY, (r) => {
       const stats = r[USAGE_STATS_KEY] || { totalTokens: 0, ticketCount: 0 };
       stats.totalTokens += tokenUsage.total;
-      stats.ticketCount += 1;
+      if (countTicket) stats.ticketCount += 1;
       chrome.storage.local.set({ [USAGE_STATS_KEY]: stats }, resolve);
     });
   });
@@ -707,6 +708,37 @@ Please improve the ticket based on this feedback. Return only the updated ticket
   return text;
 }
 
+// ── Refine reporter note ──────────────────────────────────────────────────────
+// Cleans up the raw description (typed or dictated) before ticket generation so the
+// reporter can review it. Text only — screenshots would make it slower and costlier.
+async function refineNote({ note }) {
+  const { provider, key, settings } = await getCurrentProviderAndKey();
+  const { domainContext = "", techStack = "" } = settings;
+
+  const systemPrompt = [
+    `You clean up a reporter's rough bug notes (often voice-dictated) before they are turned into a bug ticket.`,
+    `Fix grammar, punctuation and obvious speech-to-text mistakes (use the product context to correct misheard product terms).`,
+    `Organise the content into short plain-text lines in this order, only including parts the notes actually cover: what happened, steps taken, what was expected.`,
+    `Keep EVERY fact, value, name and number from the notes. Never invent details, steps or causes. Do not add headings, Markdown or commentary.`,
+    `Keep it about as long as the original or shorter. Return ONLY the refined notes.`,
+    domainContext ? `\nPRODUCT CONTEXT: ${domainContext}` : "",
+    techStack     ? `TECH STACK: ${techStack}` : "",
+  ].filter(Boolean).join("\n");
+
+  const result = await callAI({
+    provider,
+    apiKey: key,
+    systemPrompt,
+    userPrompt: `REPORTER NOTES:\n${note}`,
+    screenshots: []
+  });
+
+  const text = (result?.text || "").trim();
+  if (!text) throw new Error("Empty response from AI");
+  await recordUsage(result.tokenUsage, { countTicket: false });
+  return text;
+}
+
 // ── Keyboard shortcuts (manifest "commands") ─────────────────────────────────
 // Shortcuts usually fire while the popup is closed, so results are written straight
 // into the popup's persisted session (picked up on next open). If the popup *is*
@@ -901,9 +933,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             tokenUsage,
             error: null
           });
-          try {
-            chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, ticket, tokenUsage });
-          } catch (e) { /* popup closed */ }
+          // Rejects (async) when the popup is closed — the result is already in
+          // storage for the next open, so there's nothing to handle.
+          chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, ticket, tokenUsage }).catch(() => {});
         })
         .catch(async (err) => {
           activeGenerationControllers.delete(generationId);
@@ -916,9 +948,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             error: wasCancelled ? null : err.message,
             cancelled: wasCancelled
           });
-          try {
-            chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, error: wasCancelled ? null : err.message, cancelled: wasCancelled });
-          } catch (e) { /* popup closed */ }
+          chrome.runtime.sendMessage({ type: "GENERATION_COMPLETE", generationId, error: wasCancelled ? null : err.message, cancelled: wasCancelled }).catch(() => {});
         });
     });
 
@@ -953,6 +983,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const { currentTicket, feedback, chatHistory, screenshots } = msg.payload;
     improveTicket({ currentTicket, feedback, chatHistory, screenshots })
       .then(ticket => sendResponse({ ok: true, ticket }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "REFINE_NOTE") {
+    refineNote({ note: msg.payload.note })
+      .then(note => sendResponse({ ok: true, note }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }

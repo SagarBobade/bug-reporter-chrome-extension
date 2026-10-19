@@ -9,7 +9,7 @@ A Chrome extension (Manifest V3) that turns screenshots, notes, voice and screen
 - **Capture:** screenshot the visible tab, capture and annotate, or upload images (up to 6 per ticket).
 - **Annotate:** freehand draw, arrows (Shift snaps to 45°), rectangles, rounded rectangles, circles (stretch them into ovals), highlighter, text and crop, with undo/redo. Shapes can be selected, moved and resized.
 - **Voice notes:** dictate the bug description with the mic button. It uses Chrome's built-in speech recognition, so it's free and needs no setup.
-- **Video recording** (optional): record a screen, window or tab with mic audio. Options include a webcam picture-in-picture, an automatic voice transcript added to your notes, and trimming before you save.
+- **Video recording** (optional): record a screen, window or tab with mic audio. Options include a webcam picture-in-picture, an automatic voice transcript added to your description, and trimming before you save.
 - **GIF recording:** record up to 12 seconds of the current tab as an animated GIF.
 - **AI ticket generation:** produces a structured ticket (Summary, Steps to Reproduce, Expected/Actual, Impact and more). It runs in the background, so you can close the popup, and you can cancel it.
 - **Refine with AI:** chat with the AI to tweak the ticket ("make it shorter", "add a step for login").

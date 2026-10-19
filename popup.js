@@ -136,6 +136,120 @@ const infoGif          = $("info-gif");
     e.stopPropagation();
   });
 });
+
+// ── Refine note with AI ──────────────────────────────────────────────────────
+// Rewrites the description (grammar, dictation errors, structure) before generation.
+// Sits under the mic; shown once the note has text and not while dictating (the
+// mic timer uses that spot). After a refine both versions are kept and the button
+// toggles between them, until the note is edited — then the edit is the new text.
+const btnRefineNote = $("btn-refine-note");
+const REFINE_TITLES = {
+  idle:     "Refine with AI — fixes grammar & dictation errors and organises your description",
+  loading:  "Refining…",
+  refined:  "View original text",
+  original: "Switch back to refined text",
+};
+const refineVersions = { original: null, refined: null, showing: null }; // showing: "original" | "refined" | null
+
+function setRefineButton(mode) {
+  btnRefineNote.classList.toggle("loading", mode === "loading");
+  btnRefineNote.classList.toggle("toggled", mode === "refined" || mode === "original");
+  btnRefineNote.disabled = mode === "loading";
+  btnRefineNote.innerHTML = mode === "refined" ? icons.undo : mode === "original" ? icons.redo : icons.sparkles;
+  btnRefineNote.dataset.tooltip = REFINE_TITLES[mode];
+  // Clicked while hovered: refresh the open tooltip with the new action
+  if (btnRefineNote.matches(":hover")) showFloatingTooltip(btnRefineNote);
+}
+
+function updateRefineVisibility() {
+  const show = noteInput.value.trim().length > 0 && !state.isListening;
+  btnRefineNote.style.display = show ? "flex" : "none";
+  if (!show) floatingTooltip.classList.remove("visible");
+}
+
+// Called from syncNoteInput(): any change other than our own toggle (typing,
+// clear, dictation, reset) drops the stored versions.
+function dropStaleRefineVersions() {
+  const { showing } = refineVersions;
+  if (showing && noteInput.value !== refineVersions[showing]) {
+    refineVersions.original = refineVersions.refined = refineVersions.showing = null;
+    setRefineButton("idle");
+  }
+  updateRefineVisibility();
+}
+
+function showRefineVersion(which) {
+  refineVersions.showing = which;
+  noteInput.value = refineVersions[which];
+  syncNoteInput();
+  updateSteps();
+  updateGenerateBtn();
+  saveSession();
+  setRefineButton(which);
+}
+
+btnRefineNote.addEventListener("click", async () => {
+  if (refineVersions.showing) {
+    showRefineVersion(refineVersions.showing === "refined" ? "original" : "refined");
+    return;
+  }
+
+  const original = noteInput.value.trim();
+  if (!original) return;
+  if (state.isListening) {
+    showToast("Stop the voice note before refining", "warning");
+    return;
+  }
+  if (!state.isAuthenticated) {
+    showToast("Add an API key in Settings first", "error");
+    return;
+  }
+
+  flushNoteTyping();
+  setRefineButton("loading");
+  noteInput.readOnly = true;
+  noteInput.classList.add("refining");
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "REFINE_NOTE", payload: { note: original } });
+    if (!res?.ok) throw new Error(res?.error || "Unknown error");
+    refineVersions.original = noteInput.value;
+    refineVersions.refined = res.note;
+    showRefineVersion("refined");
+    showToast("Notes refined — review before generating", "success");
+  } catch (e) {
+    setRefineButton("idle");
+    showToast("Refine failed: " + e.message, "error", 4000);
+  } finally {
+    noteInput.readOnly = false;
+    noteInput.classList.remove("refining");
+  }
+});
+
+// One fixed-position tooltip for all [data-tooltip] icons, kept inside the popup
+// viewport: above the icon when it fits, otherwise below, clamped horizontally.
+const floatingTooltip = document.createElement("div");
+floatingTooltip.className = "floating-tooltip";
+document.body.appendChild(floatingTooltip);
+
+function showFloatingTooltip(el) {
+  floatingTooltip.textContent = el.dataset.tooltip;
+  const margin = 8;
+  const gap = 6;
+  const icon = el.getBoundingClientRect();
+  const tip = floatingTooltip.getBoundingClientRect();
+  let top = icon.top - tip.height - gap;
+  if (top < margin) top = icon.bottom + gap;
+  let left = icon.left + icon.width / 2 - tip.width / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - tip.width - margin));
+  floatingTooltip.style.top = `${top}px`;
+  floatingTooltip.style.left = `${left}px`;
+  floatingTooltip.classList.add("visible");
+}
+
+document.querySelectorAll("[data-tooltip]").forEach((el) => {
+  el.addEventListener("mouseenter", () => showFloatingTooltip(el));
+  el.addEventListener("mouseleave", () => floatingTooltip.classList.remove("visible"));
+});
 const gifInfoText      = $("gif-info-text");
 const resultGif        = $("result-gif");
 const resultGifPlayer  = $("result-gif-player");
@@ -172,6 +286,7 @@ function resizeNoteInput({ scrollToEnd = false } = {}) {
 
 // Refreshes everything that depends on the note's text (size + clear button).
 function syncNoteInput(opts) {
+  dropStaleRefineVersions();
   updateNoteInputClear();
   resizeNoteInput(opts);
 }
@@ -332,10 +447,13 @@ function saveSession(includeResult = false, noteOverride = null) {
     videoBlobUrl: state.videoBlobUrl, // Persist video URL
   };
 
-  // Optionally save the generated result
-  if (includeResult && resultTextarea.value) {
+  // Keep the generated result whenever it is on screen — this overwrites the whole
+  // session, so dropping it here would send the next popup open back to capture.
+  const resultVisible = resultPanel.classList.contains("visible") || state.hasRestoredResult;
+  if ((includeResult || resultVisible) && resultTextarea.value) {
     data.generatedTicket = resultTextarea.value;
     data.showingResult = true;
+    data.chatHistory = state.chatHistory;
   }
 
   chrome.storage.local.set({ [STORAGE_KEY]: data });
@@ -459,6 +577,8 @@ async function checkGenerationStatus() {
         // Generation completed while popup was closed - show result
         resultTextarea.value = genState.ticket;
         state.hasRestoredResult = true;
+        state.chatHistory = [];
+        saveResult(); // persist it, or the next open won't find it once the state is cleared
         if (genState.tokenUsage) showTokenUsage(genState.tokenUsage);
         // Clear the generation state since we've consumed the result
         chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
@@ -583,7 +703,7 @@ async function checkAnnotationResult() {
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
-async function init() {
+async function loadPageMeta() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab) {
@@ -595,23 +715,18 @@ async function init() {
   } catch (e) {
     if (pageMeta) pageMeta.textContent = "Unknown page";
   }
+}
 
-  await restoreSession();
-  await loadFieldSettings();
+// Startup is split so the popup paints its real state fast: only what the first
+// render needs (session, settings, page meta, annotation hand-off) is awaited —
+// all local and run in parallel. The service-worker round trip (slow when Chrome
+// has suspended the worker) and the video/GIF decode run after the first render.
+async function init() {
+  // Settings run after the restore: they reset fields that are hidden in settings
+  await Promise.all([restoreSession().then(loadFieldSettings), loadPageMeta()]);
 
-  // Check for ongoing/completed generation
-  await checkGenerationStatus();
-
-  // Check for completed annotation
+  // Needs the restored screenshots (it replaces/appends one)
   await checkAnnotationResult();
-
-  // Check for completed video recording (only if video recording is enabled)
-  if (state.videoRecordingEnabled) {
-    await checkVideoRecording();
-  }
-
-  // Check for completed GIF recording
-  await checkGifRecording();
 
   chrome.runtime.sendMessage({ type: "CHECK_API_KEY" }, (res) => {
     if (res?.ok) {
@@ -672,6 +787,19 @@ async function init() {
   if (state.hasRestoredResult) {
     showRestoredResult();
   }
+
+  // ── After first render ──
+  // A ticket that finished while the popup was closed, or one still generating
+  checkGenerationStatus().then(() => {
+    if (state.hasRestoredResult && !resultPanel.classList.contains("visible")) {
+      showRestoredResult();
+    }
+  });
+
+  // Recorded media: decoded off the critical path, then shown wherever it belongs
+  const mediaChecks = [checkGifRecording()];
+  if (state.videoRecordingEnabled) mediaChecks.push(checkVideoRecording());
+  Promise.all(mediaChecks).then(syncResultMedia);
 }
 
 // ── Check Mic State (for restoring UI on popup reopen) ───────────────────────
@@ -793,6 +921,7 @@ function startMicTimer() {
   micTimerStart = Date.now();
   micTimer.style.display = "block";
   micTimer.textContent = "0:00";
+  updateRefineVisibility();
   micTimerInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - micTimerStart) / 1000);
     const mins = Math.floor(elapsed / 60);
@@ -807,6 +936,7 @@ function stopMicTimer() {
     micTimerInterval = null;
   }
   micTimer.style.display = "none";
+  updateRefineVisibility();
 }
 
 // ── Screenshot grid ───────────────────────────────────────────────────────────
@@ -820,6 +950,7 @@ function renderGrid() {
 
     // Safe DOM creation (no innerHTML with user data)
     const img = document.createElement("img");
+    img.decoding = "async"; // full-size PNGs — don't block the popup while decoding
     img.src = src;
     img.alt = `Screenshot ${i + 1}`;
 
@@ -1129,18 +1260,21 @@ btnRecord.addEventListener("click", async () => {
 });
 
 // Check for completed video recording when popup opens
+// Native base64 decode via a data: URL — far faster than an atob + charCodeAt
+// loop for multi-MB recordings, and it doesn't block the popup's main thread.
+async function base64ToBlob(b64, type) {
+  const res = await fetch(`data:${type};base64,${b64}`);
+  return res.blob();
+}
+
 async function checkVideoRecording() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(VIDEO_RECORDING_KEY, (result) => {
+    chrome.storage.local.get(VIDEO_RECORDING_KEY, async (result) => {
       const data = result[VIDEO_RECORDING_KEY];
       if (data && data.videoBlobBase64) {
         // Restore video blob URL from base64
-        const binaryStr = atob(data.videoBlobBase64);
-        const bytes = new Uint8Array(binaryStr.length);
-        for (let i = 0; i < binaryStr.length; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
-        const blob = new Blob([bytes], { type: data.videoMimeType || 'video/webm' });
+        const blob = await base64ToBlob(data.videoBlobBase64, data.videoMimeType || 'video/webm');
+        if (state.videoBlobUrl?.startsWith("blob:")) URL.revokeObjectURL(state.videoBlobUrl);
         state.videoBlobUrl = URL.createObjectURL(blob);
         state.videoExtension = data.videoExtension || 'webm';
 
@@ -1159,6 +1293,8 @@ async function checkVideoRecording() {
           } else {
             noteInput.value = transcriptText;
           }
+          syncNoteInput(); // can land after the first render
+          updateSteps();
           saveSession();
           updateGenerateBtn();
           showToast("Voice transcript added to notes!", "info");
@@ -1286,16 +1422,12 @@ const GIF_STUCK_TIMEOUT_MS = 90000;
 // Check for an in-progress or completed GIF recording when popup opens
 async function checkGifRecording() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(GIF_RECORDING_KEY, (result) => {
+    chrome.storage.local.get(GIF_RECORDING_KEY, async (result) => {
       const data = result[GIF_RECORDING_KEY];
 
       if (data && data.gifBlobBase64) {
-        const binaryStr = atob(data.gifBlobBase64);
-        const bytes = new Uint8Array(binaryStr.length);
-        for (let i = 0; i < binaryStr.length; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
-        const blob = new Blob([bytes], { type: 'image/gif' });
+        const blob = await base64ToBlob(data.gifBlobBase64, 'image/gif');
+        if (state.gifBlobUrl) URL.revokeObjectURL(state.gifBlobUrl);
         state.gifBlobUrl = URL.createObjectURL(blob);
 
         // Show GIF preview (GIF is NOT sent to AI - only for download)
@@ -1581,6 +1713,7 @@ function displayResultPanel() {
       screenshotContainer.style.cssText = "position: relative; display: inline-block; margin: 2px;";
       
       const img = document.createElement("img");
+      img.decoding = "async";
       img.src = src;
       img.alt = `Screenshot ${i + 1}`;
       img.title = `Screenshot ${i + 1} - Click to copy`;
@@ -1626,6 +1759,14 @@ function displayResultPanel() {
   } else {
     screenshotsContainer.style.display = "none";
   }
+
+  syncResultMedia();
+}
+
+// Video/GIF in the result panel. Also called once recorded media finishes
+// decoding after startup, since that can land after the panel is shown.
+function syncResultMedia() {
+  if (!resultPanel.classList.contains("visible")) return;
 
   // Show video preview and controls if video is available
   if (resultVideo) {
@@ -1867,6 +2008,7 @@ btnCopy.addEventListener("click", async () => {
 });
 
 btnRegen.addEventListener("click", () => {
+  state.hasRestoredResult = false; // the old ticket is being replaced
   resultPanel.classList.remove("visible");
   capturePanel.style.display = "block";
   resizeNoteInput(); // was hidden while the result panel showed, so re-measure

@@ -28,6 +28,7 @@ BugReporter turns screenshots, notes and voice into a ready-to-paste bug ticket 
 | GIF recording | Popup → Record GIF | tabCapture → offscreen doc → gif.js. 12 fps, max 12 s, max 1280 px wide |
 | AI ticket generation | Popup → Generate Ticket | Runs in the service worker, survives popup close, cancellable |
 | 4 AI providers | Settings | Gemini (default), OpenAI, Anthropic, xAI |
+| Refine notes with AI | ✨ under the mic button | `REFINE_NOTE`: text-only cleanup of the description (grammar, dictation errors, structure, no invented facts). Shown once the note has text, hidden while dictating. After a refine it toggles original ↔ refined; editing the note drops both versions |
 | Refine with AI | Result panel chat box | Sends current ticket + feedback + history + screenshots |
 | Edit inputs & regenerate | Result panel → collapsible "edit inputs" | See [Known issues](#10-known-issues--gotchas) |
 | Keyboard shortcuts | Cmd/Ctrl+Shift+S, Cmd/Ctrl+Shift+M | Work with the popup closed; toolbar badge feedback (see §7) |
@@ -110,6 +111,7 @@ Contexts communicate in two ways:
 | `GENERATION_COMPLETE` | bg → popup | Push notification of result (popup may be closed) |
 | `GET_USAGE_STATS` | popup → bg | Cumulative token stats |
 | `IMPROVE_TICKET` | popup → bg | Chat refinement (synchronous reply) |
+| `REFINE_NOTE` | popup → bg | Clean up the note before generation; tokens added to usage stats without counting a ticket |
 | `START_GIF_RECORDING` | popup → bg | Gets tabCapture stream id, creates offscreen doc, injects chip |
 | `OFFSCREEN_START_GIF` | bg → offscreen | Begin capture |
 | `GIF_RECORDING_CONTROL {stop}` | GIF chip → offscreen | Stop and render |
@@ -200,7 +202,7 @@ Contexts communicate in two ways:
 2. **Stepper:** 1 Capture → 2 Describe → 3 Generate. Auto-advances: no screenshots → step 1; screenshots but no note → step 2; else step 3.
 3. **Capture panel**
    - Screenshot grid (thumbs with #n, ✏️ edit, ✕ delete with confirm), count badge, "Clear All" (shown when there are 2+).
-   - Button grid: Capture, Capture & Annotate, Upload, Record Video (if enabled), Record GIF (ⓘ tooltips; clicking the ⓘ is swallowed).
+   - Button grid: Capture, Capture & Annotate, Upload, Record Video (if enabled), Record GIF (ⓘ tooltips; clicking the ⓘ is swallowed). Tooltips use one shared `position: fixed` `.floating-tooltip` placed by popup.js and clamped to the viewport, because a CSS `::after` got clipped at the popup edges.
    - Video/GIF preview rows with ⬇ download and ✕ delete.
    - Description: mic button + timer, note textarea (fixed height, scrolls, ✕ clear).
    - Component (text) + Severity (Critical/High/Medium/Low), each toggleable in settings.
@@ -222,7 +224,7 @@ Popup/`styles.css`: `--bg #0f172a`, `--surface #1e293b`, `--border #334155`, `--
 Note: **popup.js defines its own `showToast`**, which overrides the one from `toast.js` (later script wins) and uses the popup's `#toast-container` and CSS classes.
 
 ### Settings page sections
-AI Provider (+ per-provider key, Test button, links to key consoles) · Domain Knowledge (product description, tech stack) · Ticket Sections (toggle grid + custom tag input) · Output Formatting (Markdown toggle) · Summary (format/prefix, guidelines) · Description (guidelines, extra instructions) · Popup UI Fields (Component, Severity, Video Recording) · Capture Behavior (delay 0/1/2/3/5 s) · Video Recording Configuration (webcam on/off, position, size %, quality). Sticky footer: Export, Import, dirty-state indicator, Save. Import fills the form only, so the user must click Save.
+Two independent column stacks (`.content` grid of two `.col`s, max-width 1280px, one column under 900px). **Left (AI & writing):** AI Provider (+ per-provider key, Test button, links to key consoles) · Domain Knowledge (product description, tech stack) · Summary (format/prefix, guidelines) · Description (guidelines, extra instructions). **Right (structure & capture):** Ticket Sections (toggle grid + custom tag input) · Output Formatting (Markdown toggle) · Voice Input (language) · Popup UI Fields (Component, Severity, Video Recording) · Capture Behavior (delay 0/1/2/3/5 s) · Video Recording Configuration (webcam on/off, position, size %, quality). Sticky footer: Export, Import, dirty-state indicator, Save. Import fills the form only, so the user must click Save.
 
 ---
 
@@ -284,7 +286,8 @@ Found while reading the code; none verified at runtime. Fixed: the edit-inputs R
 1. **Video "Restart"** now stops the recorder and starts a fresh `MediaRecorder` on the same stream (`startMediaRecorder()` + `isRestarting`), because the first chunk carries the container header. Don't go back to clearing `recordedChunks` mid-recording.
 2. **Edit-inputs Regenerate** copies the edited values into the main form and calls `btnRegen.click()`. Generation is async (`{generationId}` reply), so never read `res.ticket` from `GENERATE_TICKET`.
 3. **Refine chat** sends the history *before* the new message. The new message goes only as `feedback`.
-4. **`saveSession()` persists `videoBlobUrl`**, a blob URL that is invalid after the popup closes. The actual video is recovered from `bugReporterVideoRecording` instead.
+4. **`saveSession()` overwrites the whole session.** It keeps `generatedTicket`/`showingResult`/`chatHistory` while the result panel is visible (or a result was restored). A ticket picked up from `bugReporterGenerationState` on open is persisted with `saveResult()`. Without both, the next open falls back to the capture panel.
+   It also persists `videoBlobUrl`, a blob URL that is invalid after the popup closes. The actual video is recovered from `bugReporterVideoRecording` instead.
 5. **Popup re-toasts media on every open.** Video and GIF live in their own storage keys, not in `bugReporterSession`. They stay there until deleted or reset, so every popup open shows the "Video/GIF ready for download!" toast again.
 6. **Environment browser/OS** comes from the service worker UA. Screen info comes from the popup window, not the inspected page.
 7. **Import** does not restore `captureDelay`.

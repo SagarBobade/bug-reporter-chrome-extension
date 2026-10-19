@@ -140,18 +140,11 @@
       transition: all 0.3s;
     }
 
-    .step.active .step-num {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #000;
-      font-weight: 600;
-    }
     .step.done .step-num {
       background: var(--success);
       border-color: var(--success);
       color: #000;
     }
-    .step.active { color: var(--text); }
     .step.done { color: var(--success); }
 
     .step-divider {
@@ -344,12 +337,14 @@
       color: var(--text);
       border-color: var(--accent);
     }
-    .info-icon::after {
-      content: attr(data-tooltip);
-      position: absolute;
-      bottom: 130%;
-      right: 0;
-      width: 150px;
+    /* Shared tooltip for every [data-tooltip] icon. It is position:fixed and placed
+       by popup.js (clamped to the viewport), because an absolutely positioned
+       ::after got clipped by the popup edges / body overflow. */
+    .floating-tooltip {
+      position: fixed;
+      top: 0;
+      left: 0;
+      max-width: 200px;
       padding: 6px 8px;
       background: var(--surface);
       color: var(--text);
@@ -366,9 +361,9 @@
       visibility: hidden;
       pointer-events: none;
       transition: opacity 0.08s ease;
-      z-index: 20;
+      z-index: 1000;
     }
-    .info-icon:hover::after {
+    .floating-tooltip.visible {
       opacity: 1;
       visibility: visible;
     }
@@ -598,6 +593,37 @@
     .note-input-wrap.has-text .btn-clear-input {
       display: flex;
     }
+
+    /* Refine-with-AI button, under the mic. Shown by popup.js once the note has
+       text and hidden while dictating (the mic timer sits in that spot). */
+    .btn-refine-note {
+      width: 36px;
+      height: 28px;
+      margin-top: 6px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: #c4b5fd;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: all 0.2s;
+    }
+    .btn-refine-note svg { width: 14px; height: 14px; }
+    .btn-refine-note:hover:not(:disabled) {
+      border-color: var(--accent2);
+      background: rgba(124, 58, 237, 0.12);
+    }
+    /* Toggling between original and refined text */
+    .btn-refine-note.toggled {
+      border-color: var(--accent2);
+      background: rgba(124, 58, 237, 0.18);
+    }
+    .btn-refine-note:disabled { cursor: wait; opacity: 0.7; }
+    .btn-refine-note.loading svg { animation: refine-spin 1s linear infinite; }
+    @keyframes refine-spin { to { transform: rotate(360deg); } }
+    .note-input.refining { opacity: 0.6; }
 
     /* ── Context fields ──────────────────────────────────── */
     .context-row {
@@ -1394,6 +1420,7 @@
       <div class="mic-wrap">
         <button class="btn-mic" id="btn-mic" title="Record voice note">🎙️</button>
         <span class="mic-timer" id="mic-timer" style="display:none;">0:00</span>
+        <button class="btn-refine-note" id="btn-refine-note" style="display:none;" data-tooltip="Refine with AI — fixes grammar &amp; dictation errors and organises your description">✨</button>
       </div>
       <div class="note-input-wrap" id="note-input-wrap">
         <textarea
