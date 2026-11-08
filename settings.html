@@ -347,9 +347,9 @@
       <div class="field" style="margin-bottom: 12px;">
         <label>Select AI Model</label>
         <select id="aiProvider" style="padding: 10px 12px; font-size: 12px;">
-          <option value="gemini">Google Gemini 2.5 Flash</option>
-          <option value="openai">OpenAI GPT-4o</option>
-          <option value="anthropic">Anthropic Claude Sonnet</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="openai">OpenAI</option>
+          <option value="anthropic">Anthropic Claude</option>
           <option value="xai">xAI Grok</option>
         </select>
       </div>
@@ -360,10 +360,14 @@
           <label>Gemini API Key <span>Get from <a href="https://aistudio.google.com/apikey" target="_blank" style="color: var(--accent);">Google AI Studio</a></span></label>
           <div class="key-row">
             <input type="password" id="geminiApiKey" placeholder="AIza..." />
-            <button class="btn-reveal" data-target="geminiApiKey" title="Show/hide key">👁</button>
+            <button class="btn-reveal" data-target="geminiApiKey" title="Show/hide key" aria-label="Show or hide API key">👁</button>
             <button class="btn-test" data-provider="gemini" title="Test API connection">Test</button>
           </div>
           <div class="api-test-result" data-provider="gemini"></div>
+        </div>
+        <div class="field">
+          <label for="geminiModel">Model <span>Optional. Leave empty for the default</span></label>
+          <input type="text" id="geminiModel" class="model-override" data-provider="gemini" spellcheck="false" autocomplete="off" />
         </div>
       </div>
 
@@ -373,10 +377,14 @@
           <label>OpenAI API Key <span>Get from <a href="https://platform.openai.com/api-keys" target="_blank" style="color: var(--accent);">OpenAI Platform</a></span></label>
           <div class="key-row">
             <input type="password" id="openaiApiKey" placeholder="sk-..." />
-            <button class="btn-reveal" data-target="openaiApiKey" title="Show/hide key">👁</button>
+            <button class="btn-reveal" data-target="openaiApiKey" title="Show/hide key" aria-label="Show or hide API key">👁</button>
             <button class="btn-test" data-provider="openai" title="Test API connection">Test</button>
           </div>
           <div class="api-test-result" data-provider="openai"></div>
+        </div>
+        <div class="field">
+          <label for="openaiModel">Model <span>Optional. Leave empty for the default</span></label>
+          <input type="text" id="openaiModel" class="model-override" data-provider="openai" spellcheck="false" autocomplete="off" />
         </div>
       </div>
 
@@ -386,10 +394,14 @@
           <label>Anthropic API Key <span>Get from <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color: var(--accent);">Anthropic Console</a></span></label>
           <div class="key-row">
             <input type="password" id="anthropicApiKey" placeholder="sk-ant-..." />
-            <button class="btn-reveal" data-target="anthropicApiKey" title="Show/hide key">👁</button>
+            <button class="btn-reveal" data-target="anthropicApiKey" title="Show/hide key" aria-label="Show or hide API key">👁</button>
             <button class="btn-test" data-provider="anthropic" title="Test API connection">Test</button>
           </div>
           <div class="api-test-result" data-provider="anthropic"></div>
+        </div>
+        <div class="field">
+          <label for="anthropicModel">Model <span>Optional. Leave empty for the default</span></label>
+          <input type="text" id="anthropicModel" class="model-override" data-provider="anthropic" spellcheck="false" autocomplete="off" />
         </div>
       </div>
 
@@ -399,10 +411,14 @@
           <label>xAI API Key <span>Get from <a href="https://console.x.ai/" target="_blank" style="color: var(--accent);">xAI Console</a></span></label>
           <div class="key-row">
             <input type="password" id="xaiApiKey" placeholder="xai-..." />
-            <button class="btn-reveal" data-target="xaiApiKey" title="Show/hide key">👁</button>
+            <button class="btn-reveal" data-target="xaiApiKey" title="Show/hide key" aria-label="Show or hide API key">👁</button>
             <button class="btn-test" data-provider="xai" title="Test API connection">Test</button>
           </div>
           <div class="api-test-result" data-provider="xai"></div>
+        </div>
+        <div class="field">
+          <label for="xaiModel">Model <span>Optional. Leave empty for the default</span></label>
+          <input type="text" id="xaiModel" class="model-override" data-provider="xai" spellcheck="false" autocomplete="off" />
         </div>
       </div>
     </div>
@@ -466,6 +482,25 @@
       <div class="format-toggle checked" id="markdown-formatting-toggle">
         <div class="check-box">✓</div>
         <span class="check-label">Use Markdown (**bold** / `code`) instead of "quotes" for exact values</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">History &amp; Insights</div>
+      <div class="section-desc">Keeps a log of generated tickets (text, page, a small thumbnail) for the Insights page. Stored only in this browser. You can clear it from the Insights page.</div>
+      <div class="format-toggle checked" id="history-toggle" role="checkbox" aria-checked="true" tabindex="0">
+        <div class="check-box">✓</div>
+        <span class="check-label">Keep a history of generated tickets</span>
+      </div>
+      <div class="field" style="margin-top: 12px;">
+        <label for="historyRetentionDays">Keep entries for <span>the newest 200 are kept either way</span></label>
+        <select id="historyRetentionDays">
+          <option value="30">30 days</option>
+          <option value="90" selected>90 days</option>
+          <option value="180">180 days</option>
+          <option value="365">1 year</option>
+          <option value="0">No time limit</option>
+        </select>
       </div>
     </div>
 
@@ -610,6 +645,7 @@
   <button class="btn-save" id="btn-save">Save Settings</button>
 </div>
 
+<script src="lib/ticket-utils.js"></script>
 <script src="toast.js"></script>
 <script src="settings.js"></script>
 </body>

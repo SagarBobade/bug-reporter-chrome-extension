@@ -1,0 +1,8 @@
+{
+  "name": "bug-reporter",
+  "private": true,
+  "description": "BugReporter Chrome extension. No build step; this file only runs the unit tests.",
+  "scripts": {
+    "test": "node --test --test-timeout=10000 \"test/*.test.js\""
+  }
+}

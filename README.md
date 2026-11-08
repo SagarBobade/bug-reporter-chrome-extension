@@ -7,11 +7,13 @@ A Chrome extension (Manifest V3) that turns screenshots, notes, voice and screen
 ## ✨ Features
 
 - **Capture:** screenshot the visible tab, capture and annotate, or upload images (up to 6 per ticket).
-- **Annotate:** freehand draw, arrows (Shift snaps to 45°), rectangles, rounded rectangles, circles (stretch them into ovals), highlighter, text and crop, with undo/redo. Shapes can be selected, moved and resized.
+- **Annotate:** freehand draw, arrows (Shift snaps to 45°), rectangles, rounded rectangles, circles (stretch them into ovals), blur/redact (pixelate private data before it reaches the AI or the ticket), highlighter, text and crop, with undo/redo. Shapes can be selected, moved and resized.
 - **Voice notes:** dictate the bug description with the mic button. It uses Chrome's built-in speech recognition, so it's free and needs no setup.
 - **Video recording** (optional): record a screen, window or tab with mic audio. Options include a webcam picture-in-picture, an automatic voice transcript added to your description, and trimming before you save.
 - **GIF recording:** record up to 12 seconds of the current tab as an animated GIF.
 - **AI ticket generation:** produces a structured ticket (Summary, Steps to Reproduce, Expected/Actual, Impact and more). It runs in the background, so you can close the popup, and you can cancel it.
+- **Batch reports:** paste a rough list of issues, let the AI split it into separate bugs (it flags likely duplicates), review and attach screenshots, then generate a ticket for each. Copy them one by one, copy all, or export a CSV for Jira's importer.
+- **Insights & history:** the 📊 icon in the popup opens a page with the tickets you've generated (searchable, with thumbnails), how many were copied, tickets per day, top sites, severity and component breakdowns. Stored only in your browser; you can clear it or turn it off in Settings.
 - **Refine with AI:** chat with the AI to tweak the ticket ("make it shorter", "add a step for login").
 - **Rich copy:** copies the ticket as formatted HTML plus the screenshots (several screenshots are combined into one image), ready to paste into Jira, Linear and similar tools.
 - **Keyboard shortcuts:** capture screenshots and toggle voice notes without opening the popup.
@@ -36,14 +38,16 @@ There's no build step. The extension is plain JavaScript.
 1. Click the extension icon, then **⚙️** (or the "⬤ sign in" badge) to open Settings.
 2. Choose an **AI provider** and paste your key:
 
-   | Provider | Model used | Get a key |
+   | Provider | Default model | Get a key |
    |---|---|---|
    | Gemini (default) | `gemini-2.5-flash` | [Google AI Studio](https://aistudio.google.com/apikey) |
-   | OpenAI | `gpt-4o` | [OpenAI Platform](https://platform.openai.com/api-keys) |
-   | Anthropic | `claude-sonnet-4-20250514` | [Anthropic Console](https://console.anthropic.com/settings/keys) |
+   | OpenAI | `gpt-5.5` | [OpenAI Platform](https://platform.openai.com/api-keys) |
+   | Anthropic | `claude-opus-5-5` | [Anthropic Console](https://console.anthropic.com/settings/keys) |
    | xAI | `grok-2-vision-1212` | [xAI Console](https://console.x.ai/) |
 
-3. Click **Test**, then **Save Settings**. The popup badge changes to "⬤ connected".
+   Optionally type a different model ID in the **Model** field under the key (e.g. a cheaper or newer model). Leave it empty to use the default. The model must accept image input.
+
+3. Click **Test**, then **Save Settings**. Test uses the same model as generation, so a pass means both the key and the model ID work. The popup badge changes to "⬤ connected".
 
 On first install, default settings are loaded from `setting-data.json`. API keys always start empty.
 
@@ -87,7 +91,7 @@ Your work is saved automatically. Closing and reopening the popup keeps your scr
 | Section | What it controls |
 |---|---|
 | Voice Input | **Voice Language**: the language and accent you dictate in. Matching your accent (e.g. English (India)) noticeably improves voice-to-text accuracy. Applies to voice notes and video transcripts |
-| AI Provider | Provider and per-provider API keys (with a Test button) |
+| AI Provider | Provider, per-provider API keys (with a Test button) and an optional model override |
 | Domain Knowledge | Product description and tech stack, added to the prompt |
 | Ticket Sections | Summary, Environment, Steps, Expected, Actual, Impact, Priority, Acceptance Criteria, Logs, Screenshots, Workaround, Additional Context, plus your own custom sections |
 | Output Formatting | Use Markdown (`code`, **bold**) for exact values instead of quotes |
@@ -114,9 +118,17 @@ recording-controls.js      Floating REC controls injected into the recorded page
 gif-recording-controls.js  Floating GIF controls injected into the recorded page
 offscreen.html / .js       Offscreen document that captures and encodes GIFs
 settings.html / .js        Settings page
+batch.html / batch.js      Batch page: split a list into issues, review, generate many tickets
+history.html / history.js  Insights & history page (local ticket log, charts, CSV export)
 setting-data.json          Default settings applied on first install
 styles.css, toast.js, icons.js   Shared styles, toasts, SVG icons
+lib/ticket-utils.js        Pure helpers shared by the service worker, popup and tests:
+                           models, provider request/response handling, environment
+                           parsing, Markdown→HTML
+lib/dom-utils.js           Browser helpers shared by the popup, batch and history pages
+                           (PNG conversion, thumbnails, rich clipboard, page environment, CSV download)
 lib/gif.js, gif.worker.js  Vendored gif.js encoder
+test/                      Unit tests (Node's built-in test runner)
 icons/                     Extension icons
 knowledge.md               Detailed internals: data flow, storage keys, messages, known issues
 ```
@@ -133,7 +145,15 @@ See **[knowledge.md](knowledge.md)** for architecture, storage keys, message typ
   - popup: right-click the popup and choose **Inspect**
   - service worker: the "service worker" link on `chrome://extensions`
   - GIF offscreen document: `chrome://inspect/#other`
-- To change models or the prompt, edit `callGemini` / `callOpenAI` / `callAnthropic` / `callXAI`, `testApiKey` and `buildPrompt` in `background.js`.
+- To change default models, edit `DEFAULT_MODELS` in `lib/ticket-utils.js`. Request bodies are built by `buildProviderRequest` in the same file. The prompt is `buildPrompt` in `background.js`.
+
+### Tests
+
+```
+npm test
+```
+
+Needs Node 20 or newer, with no dependencies to install. The tests cover the shared helpers in `lib/ticket-utils.js` and the service worker: `background.js` is loaded into a sandbox with a fake `chrome` API and a mocked `fetch`, so no API key or network is used. UI pages (popup, settings, annotator) are not unit-tested; check them by loading the unpacked extension.
 
 ## ⚠️ Limitations
 

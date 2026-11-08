@@ -48,6 +48,14 @@ async function init() {
   if (s.anthropicApiKey) $("anthropicApiKey").value = s.anthropicApiKey;
   if (s.xaiApiKey) $("xaiApiKey").value = s.xaiApiKey;
 
+  // Model overrides — placeholder shows the built-in default for each provider
+  AI_PROVIDERS.forEach(p => {
+    const input = $(`${p}Model`);
+    if (!input) return;
+    input.placeholder = TicketUtils.DEFAULT_MODELS[p] || "";
+    input.value = s.modelOverrides?.[p] || "";
+  });
+
   // Legacy: migrate old apiKey to geminiApiKey
   if (s.apiKey && !s.geminiApiKey) {
     $("geminiApiKey").value = s.apiKey;
@@ -89,6 +97,8 @@ async function init() {
 
   // Output formatting (Markdown vs quotes for exact values) — defaults to on
   const useMarkdownFormatting = s.useMarkdownFormatting !== false;
+  setHistoryToggle(s.historyEnabled !== false);
+  $("historyRetentionDays").value = String(s.historyRetentionDays ?? 90);
   $("markdown-formatting-toggle").classList.toggle("checked", useMarkdownFormatting);
   $("markdown-formatting-toggle").querySelector(".check-box").textContent = useMarkdownFormatting ? "✓" : "";
 
@@ -180,10 +190,11 @@ async function testApiKey(provider) {
     const res = await chrome.runtime.sendMessage({
       type: "TEST_API_KEY",
       provider: provider,
-      key: apiKey
+      key: apiKey,
+      model: $(`${provider}Model`)?.value.trim() || ""
     });
     if (res?.ok) {
-      result.textContent = "✓ Connection successful!";
+      result.textContent = `✓ Connection successful (${res.model})`;
       result.className = "api-test-result visible success";
     } else {
       result.textContent = "✗ " + (res?.error || "Connection failed");
@@ -235,6 +246,26 @@ $("markdown-formatting-toggle").addEventListener("click", () => {
   el.classList.toggle("checked");
   el.querySelector(".check-box").textContent = el.classList.contains("checked") ? "✓" : "";
   setDirty(true);
+});
+
+// ── History toggle ────────────────────────────────────────────────────────────
+function setHistoryToggle(on) {
+  const el = $("history-toggle");
+  el.classList.toggle("checked", on);
+  el.setAttribute("aria-checked", String(on));
+  el.querySelector(".check-box").textContent = on ? "✓" : "";
+  $("historyRetentionDays").disabled = !on;
+}
+function isHistoryEnabled() {
+  return $("history-toggle").classList.contains("checked");
+}
+function getHistoryRetentionDays() {
+  const v = parseInt($("historyRetentionDays").value, 10);
+  return Number.isFinite(v) && v >= 0 ? v : 90;
+}
+$("history-toggle").addEventListener("click", () => { setHistoryToggle(!isHistoryEnabled()); setDirty(true); });
+$("history-toggle").addEventListener("keydown", (e) => {
+  if (e.key === " " || e.key === "Enter") { e.preventDefault(); setHistoryToggle(!isHistoryEnabled()); setDirty(true); }
 });
 
 function getUseMarkdownFormatting() {
@@ -370,6 +401,16 @@ $("custom-section-input").addEventListener("keydown", (e) => {
   }
 });
 
+// Only non-empty overrides are stored; an empty field means "use the default".
+function getModelOverrides() {
+  const out = {};
+  AI_PROVIDERS.forEach(p => {
+    const v = $(`${p}Model`)?.value.trim();
+    if (v) out[p] = v;
+  });
+  return out;
+}
+
 // ── Save ──────────────────────────────────────────────────────────────────────
 $("btn-save").addEventListener("click", async () => {
   const aiProvider = $("aiProvider").value;
@@ -381,6 +422,7 @@ $("btn-save").addEventListener("click", async () => {
     openaiApiKey:         $("openaiApiKey").value.trim(),
     anthropicApiKey:      $("anthropicApiKey").value.trim(),
     xaiApiKey:            $("xaiApiKey").value.trim(),
+    modelOverrides:       getModelOverrides(),
     domainContext:        $("domainContext").value.trim(),
     techStack:            $("techStack").value.trim(),
     summaryFormat:        $("summaryFormat").value.trim(),
@@ -397,6 +439,8 @@ $("btn-save").addEventListener("click", async () => {
     webcamSize:           $("webcamSize") ? parseInt($("webcamSize").value) : 20,
     recordingQuality:     $("recordingQuality") ? parseInt($("recordingQuality").value) : 720,
     captureDelay:         $("captureDelay") ? parseInt($("captureDelay").value) : 0,
+    historyEnabled:       isHistoryEnabled(),
+    historyRetentionDays: getHistoryRetentionDays(),
   };
 
   // Save settings
@@ -431,6 +475,7 @@ $("btn-export").addEventListener("click", () => {
   const settings = {
     aiProvider:           $("aiProvider").value,
     voiceLanguage:        $("voiceLanguage").value,
+    modelOverrides:       getModelOverrides(),
     domainContext:        $("domainContext").value.trim(),
     techStack:            $("techStack").value.trim(),
     summaryFormat:        $("summaryFormat").value.trim(),
@@ -447,6 +492,8 @@ $("btn-export").addEventListener("click", () => {
     webcamSize:           $("webcamSize") ? parseInt($("webcamSize").value) : 20,
     recordingQuality:     $("recordingQuality") ? parseInt($("recordingQuality").value) : 720,
     captureDelay:         $("captureDelay") ? parseInt($("captureDelay").value) : 0,
+    historyEnabled:       isHistoryEnabled(),
+    historyRetentionDays: getHistoryRetentionDays(),
     exportedAt: new Date().toISOString(),
     version: "1.2"
   };
@@ -533,6 +580,22 @@ $("import-file").addEventListener("change", async (e) => {
     }
     if (settings.recordingQuality && $("recordingQuality")) {
       $("recordingQuality").value = settings.recordingQuality.toString();
+    }
+    // Only accept a delay this page offers, so a bad file can't leave the select blank
+    if (settings.captureDelay !== undefined && $("captureDelay") &&
+        [...$("captureDelay").options].some(o => o.value === String(settings.captureDelay))) {
+      $("captureDelay").value = String(settings.captureDelay);
+    }
+    if (typeof settings.historyEnabled === "boolean") setHistoryToggle(settings.historyEnabled);
+    if ([...$("historyRetentionDays").options].some(o => o.value === String(settings.historyRetentionDays))) {
+      $("historyRetentionDays").value = String(settings.historyRetentionDays);
+    }
+    if (settings.modelOverrides && typeof settings.modelOverrides === "object") {
+      AI_PROVIDERS.forEach(p => {
+        const input = $(`${p}Model`);
+        const v = settings.modelOverrides[p];
+        if (input) input.value = typeof v === "string" ? v : "";
+      });
     }
 
     setDirty(true);

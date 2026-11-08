@@ -252,6 +252,43 @@ class EllipseAnnotation extends BoxShapeAnnotation {
   }
 }
 
+// Pixelates whatever is under it on the base (baked) layer — for hiding emails,
+// tokens and customer data before a screenshot goes to the AI or a ticket. The
+// block size is large enough that text underneath can't be read back. It stays
+// movable/resizable until committed, and the saved image only ever contains the
+// pixelated pixels (the export is rendered from the canvas, not the original).
+class BlurAnnotation extends BoxShapeAnnotation {
+  constructor(x, y, width, height, color, lineWidth) {
+    super('blur', x, y, width, height, color, lineWidth);
+  }
+
+  static blockSize(width, height) {
+    return Math.max(14, Math.round(Math.min(width, height) / 6));
+  }
+
+  draw(ctx) {
+    const src = baseCanvas;
+    const b = this.getBounds();
+    const x = Math.max(0, Math.floor(b.x));
+    const y = Math.max(0, Math.floor(b.y));
+    const w = Math.min(src.width, Math.ceil(b.x + b.width)) - x;
+    const h = Math.min(src.height, Math.ceil(b.y + b.height)) - y;
+    if (w < 1 || h < 1) return;
+
+    const block = BlurAnnotation.blockSize(w, h);
+    const small = document.createElement('canvas');
+    small.width = Math.max(1, Math.ceil(w / block));
+    small.height = Math.max(1, Math.ceil(h / block));
+    const sctx = small.getContext('2d');
+    sctx.drawImage(src, x, y, w, h, 0, 0, small.width, small.height);
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(small, 0, 0, small.width, small.height, x, y, w, h);
+    ctx.restore();
+  }
+}
+
 // Builds the box shape for a drag from (x1,y1) to (x2,y2). The circle tool
 // always starts as a perfect circle (size = larger drag axis); its handles then
 // stretch it into an oval.
@@ -263,10 +300,11 @@ function createBoxShape(tool, x1, y1, x2, y2, color, lineWidth) {
     h = (h < 0 ? -1 : 1) * size;
     return new EllipseAnnotation(x1, y1, w, h, color, lineWidth);
   }
+  if (tool === "blur") return new BlurAnnotation(x1, y1, w, h, color, lineWidth);
   return new RoundRectAnnotation(x1, y1, w, h, color, lineWidth);
 }
 
-const BOX_SHAPE_TOOLS = ["roundrect", "ellipse"];
+const BOX_SHAPE_TOOLS = ["roundrect", "ellipse", "blur"];
 
 class ArrowAnnotation extends Annotation {
   constructor(x1, y1, x2, y2, color, lineWidth) {
@@ -644,6 +682,8 @@ function restoreAnnotationsFromHistory(historyData) {
       annotation = new RoundRectAnnotation(data.x, data.y, data.width, data.height, data.color, data.lineWidth);
     } else if (data.type === 'ellipse') {
       annotation = new EllipseAnnotation(data.x, data.y, data.width, data.height, data.color, data.lineWidth);
+    } else if (data.type === 'blur') {
+      annotation = new BlurAnnotation(data.x, data.y, data.width, data.height, data.color, data.lineWidth);
     } else if (data.type === 'arrow') {
       annotation = new ArrowAnnotation(data.x, data.y, data.x2, data.y2, data.color, data.lineWidth);
     } else if (data.type === 'drawing') {
@@ -845,14 +885,12 @@ function updateCursor() {
 function updateInstructions() {
   const toolInstructions = {
     draw: "Click and drag to draw freehand lines",
-    line: "Click and drag to draw a straight line",
     arrow: "Click and drag to draw an arrow (hold Shift to snap to 45°). Click an arrow to select it, then drag either end to reposition it.",
     rect: "Click and drag to draw a rectangle. Click rectangles to select, move, or resize them.",
     roundrect: "Click and drag to draw a rounded rectangle",
     ellipse: "Click and drag to draw a circle — drag its edge handles to stretch it into an oval",
-    circle: "Click and drag to draw a circle",
     highlight: "Click and drag to highlight an area (semi-transparent)",
-    blur: "Click and drag to blur/pixelate an area for privacy",
+    blur: "Click and drag over private data (emails, tokens, names) to pixelate it. Drag corners/edges to adjust.",
     text: "Click to place text, then type your text. Double-click existing text to edit it. Drag the bottom-right handle to resize.",
     crop: "Click and drag to select area to crop"
   };

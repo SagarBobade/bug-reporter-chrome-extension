@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batch Bug Reports</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { min-height: 100vh; padding: 24px 16px 96px; }
+  .page { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+  .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .page-header h1 { font-size: var(--text-2xl); font-weight: 700; }
+  .page-header p { color: var(--text-muted); font-size: var(--text-sm); margin-top: 4px; overflow-wrap: anywhere; }
+  .target { color: var(--text-subtle); }
+
+  .steps { display: flex; gap: 8px; flex-wrap: wrap; }
+  .step { font-size: var(--text-sm); color: var(--text-subtle); padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-full); }
+  .step.active { color: var(--text); border-color: var(--primary); background: rgba(79, 70, 229, 0.15); }
+  .step.done { color: var(--success); border-color: rgba(16, 185, 129, 0.4); }
+
+  .card h2 { font-size: var(--text-lg); font-weight: 600; margin-bottom: 4px; }
+  .card .hint { color: var(--text-muted); font-size: var(--text-sm); margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row.end { justify-content: flex-end; }
+  .spacer { flex: 1; }
+
+  .banner { padding: 10px 14px; border-radius: var(--radius-md); font-size: var(--text-sm); border: 1px solid; }
+  .banner.warn { border-color: rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.1); color: #fcd34d; }
+  .banner a { color: inherit; }
+
+  #raw-text { min-height: 200px; font-size: var(--text-base); line-height: 1.5; }
+
+  /* Screenshot pool */
+  .pool { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pool-item { position: relative; width: 96px; height: 64px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border); background: #000; }
+  .pool-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .pool-item .num { position: absolute; left: 4px; bottom: 4px; font-size: 10px; background: rgba(0,0,0,.75); color: #fff; padding: 0 4px; border-radius: 3px; }
+  .pool-item .del { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border: none; border-radius: 4px; background: rgba(0,0,0,.75); color: #fff; cursor: pointer; font-size: 11px; line-height: 1; }
+  .pool-item .del:hover, .pool-item .del:focus-visible { background: var(--danger); }
+  .pool-empty { color: var(--text-subtle); font-size: var(--text-sm); }
+
+  /* Review list */
+  .issue { display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+  .issue.excluded { opacity: 0.55; }
+  .issue + .issue { margin-top: 10px; }
+  .issue-head { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 6px; }
+  .issue-num { font-weight: 700; color: var(--text-muted); font-size: var(--text-sm); }
+  .issue-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .issue-body label { font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .issue-title { font-weight: 600; font-size: var(--text-base) !important; }
+  .issue-details { min-height: 70px !important; }
+  .dup { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--text-sm); color: #fcd34d; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { width: 56px; height: 38px; padding: 0; border-radius: var(--radius-sm); overflow: hidden; border: 2px solid transparent; background: #000; cursor: pointer; opacity: .55; position: relative; }
+  .chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .chip[aria-pressed="true"] { border-color: var(--primary-light); opacity: 1; }
+  .chip span { position: absolute; left: 2px; bottom: 1px; font-size: 9px; color: #fff; background: rgba(0,0,0,.7); padding: 0 3px; border-radius: 2px; }
+  .issue-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .btn-sm { padding: 4px 10px; font-size: var(--text-xs); }
+
+  .sticky-bar { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.96); border-top: 1px solid var(--border); padding: 12px 16px; z-index: 10; }
+  .sticky-inner { max-width: 920px; margin: 0 auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .sticky-inner .summary { color: var(--text-muted); font-size: var(--text-sm); }
+
+  /* Results */
+  .result { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+  .result + .result { margin-top: 10px; }
+  .result-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; flex-wrap: wrap; }
+  .result-title { font-weight: 600; flex: 1; min-width: 200px; overflow-wrap: anywhere; }
+  .pill { font-size: var(--text-xs); padding: 2px 8px; border-radius: var(--radius-full); border: 1px solid var(--border); color: var(--text-muted); white-space: nowrap; }
+  .pill.generating { color: #c7d2fe; border-color: var(--primary-light); }
+  .pill.done { color: #6ee7b7; border-color: rgba(16, 185, 129, .5); }
+  .pill.failed { color: #fca5a5; border-color: rgba(239, 68, 68, .5); }
+  .pill.copied { color: var(--text); border-color: var(--border-light); }
+  .result-body { border-top: 1px solid var(--border); padding: 12px 14px; font-size: var(--text-sm); line-height: 1.6; }
+  .result-body h2, .result-body h3, .result-body h4 { font-size: var(--text-base); margin: 10px 0 4px; }
+  .result-body h2:first-child { margin-top: 0; }
+  .result-body ul, .result-body ol { padding-left: 20px; }
+  .result-body code { background: var(--surface2); padding: 0 4px; border-radius: 3px; }
+  .result-body br { content: ""; display: block; margin-top: 4px; }
+  .result-error { color: #fca5a5; font-size: var(--text-sm); padding: 0 14px 12px; }
+  .progress { color: var(--text-muted); font-size: var(--text-sm); }
+
+  [hidden] { display: none !important; }
+
+  @media (max-width: 560px) {
+    body { padding-top: 16px; }
+    .issue { grid-template-columns: 1fr; }
+    .issue-head { flex-direction: row; padding-top: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1>Batch bug reports</h1>
+      <p>Paste a list of issues, review how they were split, then generate a ticket for each.
+        <br><span class="target" id="target-label"></span></p>
+    </div>
+    <div class="steps" aria-label="Progress">
+      <span class="step" id="step-input">1 · Describe</span>
+      <span class="step" id="step-review">2 · Review</span>
+      <span class="step" id="step-results">3 · Tickets</span>
+    </div>
+  </header>
+
+  <div class="banner warn" id="key-banner" hidden>
+    No API key for the selected AI provider. <a href="settings.html" target="_blank">Add one in Settings</a>, then come back.
+  </div>
+
+  <!-- Step 1 -->
+  <section class="card" id="section-input">
+    <h2>1. Describe the issues</h2>
+    <p class="hint">One issue per line works best, but rough notes are fine. Up to <span id="max-issues"></span> issues per batch. Include where it happens and what you expected.</p>
+    <textarea id="raw-text" aria-label="Issues to report" placeholder="- Save button on Profile page does nothing when the phone field is empty
+- Date picker shows yesterday's date in Safari
+- Typo on checkout page: &quot;Procced to payment&quot;"></textarea>
+    <div class="row end mt-md">
+      <button class="btn btn-secondary" id="btn-split-lines" title="No AI call: each non-empty line becomes one issue">Split by line</button>
+      <button class="btn btn-primary" id="btn-split-ai">✨ Split with AI</button>
+    </div>
+  </section>
+
+  <!-- Screenshot pool -->
+  <section class="card" id="section-pool">
+    <div class="row">
+      <h2 style="margin:0">Screenshots</h2>
+      <span class="spacer"></span>
+      <input type="file" id="pool-upload" accept="image/png,image/jpeg,image/webp" multiple hidden>
+      <button class="btn btn-ghost btn-sm" id="btn-pool-add">Add images</button>
+    </div>
+    <p class="hint">From your current report, plus any you add or paste (⌘/Ctrl+V). Attach them to issues in the review step.</p>
+    <div class="pool" id="pool"></div>
+  </section>
+
+  <!-- Step 2 -->
+  <section id="section-review" hidden>
+    <div class="row mb-md">
+      <h2 style="font-size: var(--text-lg)">2. Review the issues</h2>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-sm" id="btn-back-input">← Edit text</button>
+      <button class="btn btn-secondary btn-sm" id="btn-add-issue">+ Add issue</button>
+    </div>
+    <div id="issue-list"></div>
+  </section>
+
+  <!-- Step 3 -->
+  <section id="section-results" hidden>
+    <div class="row mb-md">
+      <h2 style="font-size: var(--text-lg)">3. Tickets</h2>
+      <span class="progress" id="progress"></span>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-sm" id="btn-back-review">← Back to review</button>
+      <button class="btn btn-danger btn-sm" id="btn-cancel" hidden>Cancel remaining</button>
+    </div>
+    <div class="row mb-md">
+      <button class="btn btn-primary btn-sm" id="btn-copy-all">Copy all</button>
+      <button class="btn btn-secondary btn-sm" id="btn-export-csv" title="Columns: Summary, Description, Page URL — ready for Jira's CSV import">Export CSV</button>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-sm" id="btn-new-batch">Start a new batch</button>
+    </div>
+    <div id="result-list"></div>
+  </section>
+</div>
+
+<div class="sticky-bar" id="review-bar" hidden>
+  <div class="sticky-inner">
+    <span class="summary" id="review-summary"></span>
+    <span class="spacer"></span>
+    <button class="btn btn-primary" id="btn-generate">Generate tickets</button>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+<script src="lib/ticket-utils.js"></script>
+<script src="lib/dom-utils.js"></script>
+<script src="toast.js"></script>
+<script src="batch.js"></script>
+</body>
+</html>

@@ -1287,27 +1287,79 @@
       opacity: 1;
       transform: translateX(0);
     }
+    /* Result panel: always-visible "view" button on each screenshot */
+    .result-shot-view {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      cursor: zoom-in;
+    }
+    .result-shot-view:hover,
+    .result-shot-view:focus-visible { background: var(--accent, #4f46e5); }
+    /* Header: brand shrinks (with ellipsis) before anything wraps; the badge and
+       the icon buttons keep their size. */
+    .header-brand {
+      display: flex; align-items: center; gap: 10px; min-width: 0;
+      text-decoration: none; color: inherit; cursor: pointer;
+    }
+    .header-text { min-width: 0; }
+    .header-text h1, .header-text p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .auth-badge { white-space: nowrap; flex-shrink: 0; }
+    .header-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .header-icon-btn {
+      background: none; border: 1px solid var(--border); border-radius: 6px;
+      color: var(--muted); width: 28px; height: 28px; padding: 0;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s; flex-shrink: 0;
+    }
+    .header-icon-btn svg { width: 16px; height: 16px; display: block; }
+    .header-icon-btn:hover, .header-icon-btn:focus-visible { color: var(--text); border-color: var(--accent); }
+    .btn-batch-link {
+      display: block; width: 100%; margin-top: 8px; padding: 6px;
+      background: none; border: none; color: var(--muted);
+      font-size: 12px; cursor: pointer; text-align: center;
+    }
+    .btn-batch-link:hover, .btn-batch-link:focus-visible { color: var(--text); text-decoration: underline; }
+    /* "Refining description… ✕ Cancel" — same Cancel button as Generate */
+    .refine-status {
+      display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+      margin-top: 6px;
+    }
+    .refine-status[hidden] { display: none; }
+    .refine-status-text { font-size: 11px; color: var(--muted); }
+    .btn-cancel-inline { display: inline-block; margin: 0; }
+    /* Chat send button while a refine runs: a stop button */
+    .btn-improve.stop { background: transparent; border: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
+    .btn-improve.stop:hover { background: var(--danger); color: #fff; }
   </style>
 </head>
 <body>
 
 <!-- ── Header ────────────────────────────────────────────── -->
 <div class="header">
-  <a href="https://sagarbobade.github.io/-website-bug-reporter/" target="_blank" style="display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; cursor: pointer;">
+  <a class="header-brand" href="https://sagarbobade.github.io/-website-bug-reporter/" target="_blank">
   <div class="logo"><img src="icons/icon2.png" alt="Bug Reporter" width="30" height="30" style="display:block;" /></div>
   <div class="header-text">
     <h1>Bug Reporter</h1>
-    <p>Ticket Generator</p>
+    <p id="header-subtitle">Ticket Generator</p>
   </div>
 </a>
   <div class="auth-badge" id="auth-badge" title="Click to set API key">⬤ sign in</div>
-  <div style="display: flex; gap: 4px; margin-left: 6px;">
-  <button id="btn-settings" title="Settings" style="
-    background: none; border: 1px solid var(--border); border-radius: 6px;
-    color: var(--muted); font-size: 14px; width: 28px; height: 28px;
-    cursor: pointer; display: flex; align-items: center; justify-content: center;
-    transition: all 0.2s; flex-shrink: 0;
-  ">⚙️</button>
+  <div class="header-actions">
+  <button id="btn-insights" class="header-icon-btn" title="Insights &amp; history" aria-label="Insights and history">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"></path><path d="M7 16v-4"></path><path d="M12 16V8"></path><path d="M17 16v-7"></path></svg>
+  </button>
+  <button id="btn-settings" class="header-icon-btn" title="Settings" aria-label="Settings">⚙️</button>
   </div>
 </div>
 
@@ -1339,7 +1391,7 @@
       <div class="section-label">
         Screenshots
         <span id="shot-count" style="display:none" class="count-badge">0</span>
-        <button id="btn-clear-all" class="btn-clear-all" style="display:none" title="Clear all screenshots">✕ Clear All</button>
+        <button id="btn-clear-all" class="btn-clear-all" style="display:none" title="Clear all screenshots" aria-label="Clear all screenshots">✕ Clear All</button>
       </div>
 
       <div class="screenshot-grid" id="screenshot-grid">
@@ -1397,8 +1449,8 @@
         <span id="video-info-text">🎬 Video recorded</span>
         <div style="display: flex; gap: 6px;">
           <button class="thumb-del btn-view-media" id="btn-view-video" title="View video" aria-label="View video"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
-          <button class="thumb-del" id="btn-download-video" title="Download video" style="background: var(--accent); color: #000;">⬇</button>
-          <button class="thumb-del" id="btn-delete-video" title="Remove video">✕</button>
+          <button class="thumb-del" id="btn-download-video" title="Download video" style="background: var(--accent); color: #000;" aria-label="Download video">⬇</button>
+          <button class="thumb-del" id="btn-delete-video" title="Remove video" aria-label="Remove video">✕</button>
         </div>
       </div>
     </div>
@@ -1408,8 +1460,8 @@
         <span id="gif-info-text">🎞️ GIF recorded</span>
         <div style="display: flex; gap: 6px;">
           <button class="thumb-del btn-view-media" id="btn-view-gif" title="View GIF" aria-label="View GIF"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
-          <button class="thumb-del" id="btn-download-gif" title="Download GIF" style="background: var(--accent); color: #000;">⬇</button>
-          <button class="thumb-del" id="btn-delete-gif" title="Remove GIF">✕</button>
+          <button class="thumb-del" id="btn-download-gif" title="Download GIF" style="background: var(--accent); color: #000;" aria-label="Download GIF">⬇</button>
+          <button class="thumb-del" id="btn-delete-gif" title="Remove GIF" aria-label="Remove GIF">✕</button>
         </div>
       </div>
     </div>
@@ -1418,9 +1470,9 @@
 
     <div class="voice-row">
       <div class="mic-wrap">
-        <button class="btn-mic" id="btn-mic" title="Record voice note">🎙️</button>
+        <button class="btn-mic" id="btn-mic" title="Record voice note" aria-label="Record voice note">🎙️</button>
         <span class="mic-timer" id="mic-timer" style="display:none;">0:00</span>
-        <button class="btn-refine-note" id="btn-refine-note" style="display:none;" data-tooltip="Refine with AI — fixes grammar &amp; dictation errors and organises your description">✨</button>
+        <button class="btn-refine-note" id="btn-refine-note" style="display:none;" aria-label="Refine description with AI" data-tooltip="Refine with AI — fixes grammar &amp; dictation errors and organises your description">✨</button>
       </div>
       <div class="note-input-wrap" id="note-input-wrap">
         <textarea
@@ -1429,7 +1481,11 @@
           placeholder="Describe what you were doing, what broke, what you expected… (or record voice)"
           rows="2"
         ></textarea>
-        <button class="btn-clear-input" id="btn-clear-note" title="Clear text">✕</button>
+        <button class="btn-clear-input" id="btn-clear-note" title="Clear text" aria-label="Clear text">✕</button>
+        <div class="refine-status" id="refine-status" role="status" hidden>
+          <span class="refine-status-text">Refining description…</span>
+          <button class="btn-cancel-generate btn-cancel-inline" id="btn-cancel-refine" aria-label="Cancel refining">✕ Cancel</button>
+        </div>
       </div>
     </div>
 
@@ -1458,6 +1514,9 @@
     <div class="loading-bar" id="loading-bar"><div class="loading-bar-fill"></div></div>
     <div class="loading-text" id="loading-text">Generating the ticket…</div>
     <button class="btn-cancel-generate" id="btn-cancel-generate" style="display:none;">✕ Cancel</button>
+    <button class="btn-batch-link" id="btn-batch" title="Paste a list of issues and generate a ticket for each">
+      Several bugs? Create them in a batch →
+    </button>
   </div>
 
   <!-- Result panel -->
@@ -1465,7 +1524,7 @@
     <div class="result-header">
       <div class="section-label" style="margin-bottom:0; flex:1">Generated Ticket</div>
       <div class="result-actions">
-        <button class="btn-sm" id="btn-regen" title="Regenerate">↺ redo</button>
+        <button class="btn-sm" id="btn-regen" title="Regenerate" aria-label="Regenerate">↺ redo</button>
         <button class="btn-sm primary" id="btn-copy">⎘ Copy</button>
       </div>
     </div>
@@ -1555,7 +1614,7 @@
       <div id="chat-history" class="chat-history"></div>
       <div class="chat-input-row">
         <textarea id="chat-input" class="chat-input" placeholder="e.g. Make it shorter, add more steps, focus on the login issue..." rows="2"></textarea>
-        <button id="btn-improve" class="btn-improve" title="Send feedback to AI">
+        <button id="btn-improve" class="btn-improve" title="Send feedback to AI" aria-label="Send feedback to AI">
           <span>↑</span>
         </button>
       </div>
@@ -1585,15 +1644,17 @@
 
 <!-- ── Image Preview Modal ──────────────────────────────── -->
 <div class="preview-modal" id="preview-modal">
-  <button class="preview-close" id="preview-close">✕</button>
-  <button class="preview-nav prev" id="preview-prev">‹</button>
+  <button class="preview-close" id="preview-close" aria-label="Close preview">✕</button>
+  <button class="preview-nav prev" id="preview-prev" aria-label="Previous image">‹</button>
   <img id="preview-image" src="" alt="Preview" />
   <video id="preview-video" controls playsinline style="display:none;"></video>
-  <button class="preview-nav next" id="preview-next">›</button>
+  <button class="preview-nav next" id="preview-next" aria-label="Next image">›</button>
   <div class="preview-counter" id="preview-counter">1 / 1</div>
 </div>
 
 <script src="icons.js"></script>
+<script src="lib/ticket-utils.js"></script>
+<script src="lib/dom-utils.js"></script>
 <script src="toast.js"></script>
 <script src="popup.js"></script>
 </body>

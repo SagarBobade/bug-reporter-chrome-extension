@@ -27,12 +27,15 @@ document.addEventListener('DOMContentLoaded', () => {
           break;
         }
       }
-      if (replaced) {
-        const span = document.createElement('span');
-        span.innerHTML = node.textContent;
+      if (replaced && node.parentNode) {
+        // Escape first: the text may come from the user (chat, notes) and must never
+        // be parsed as HTML. Only the known SVG strings are inserted as markup.
+        let html = TicketUtils.escapeHtml(node.textContent);
         for (const [emoji, svg] of Object.entries(iconReplacements)) {
-          span.innerHTML = span.innerHTML.replace(emoji, svg);
+          html = html.split(emoji).join(svg);
         }
+        const span = document.createElement('span');
+        span.innerHTML = html;
         node.parentNode.replaceChild(span, node);
       }
     } else if (node.nodeType === Node.ELEMENT_NODE) {
@@ -46,7 +49,60 @@ document.addEventListener('DOMContentLoaded', () => {
   // Replace emoji after a short delay to ensure DOM is fully loaded
   setTimeout(() => {
     replaceEmoji(document.body);
+    // Buttons rewrite their own innerHTML later (e.g. "Generating…" → "Generate
+    // Ticket"), which brings the raw emoji back. Keep swapping on every change.
+    // Text areas/inputs are skipped: their content is a value, not child nodes.
+    new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        m.addedNodes.forEach((n) => {
+          if (n.nodeType === Node.ELEMENT_NODE && n.closest && n.closest('textarea, .chat-history')) return;
+          if (n.nodeType === Node.TEXT_NODE && n.parentElement && n.parentElement.closest('textarea, .chat-history')) return;
+          replaceEmoji(n);
+        });
+      }
+    }).observe(document.body, { childList: true, subtree: true });
   }, 10);
+});
+
+// ── Header subtitle fit ──────────────────────────────────────────────────────
+// "TICKET GENERATOR" shrinks (font size and letter spacing together, 0.5px steps)
+// until it fits the space the badge and header buttons leave. Below the minimum
+// size the CSS ellipsis takes over. Re-fits when the header resizes or the badge
+// text changes ("sign in" ↔ "connected").
+const SUBTITLE_MAX_PX = 10;
+const SUBTITLE_MIN_PX = 7;
+const SUBTITLE_SPACING_PX = 0.5; // letter-spacing at full size
+
+function fitHeaderSubtitle() {
+  const el = document.getElementById("header-subtitle");
+  if (!el) return;
+  let size = SUBTITLE_MAX_PX;
+  const apply = () => {
+    el.style.fontSize = `${size}px`;
+    el.style.letterSpacing = `${(SUBTITLE_SPACING_PX * size / SUBTITLE_MAX_PX).toFixed(2)}px`;
+  };
+  apply();
+  while (el.scrollWidth > el.clientWidth + 0.5 && size > SUBTITLE_MIN_PX) {
+    size = Math.max(SUBTITLE_MIN_PX, size - 0.5);
+    apply();
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const header = document.querySelector(".header");
+  const badge = document.getElementById("auth-badge");
+  let queued = false;
+  // One fit per frame. Observing the whole header (not the subtitle) means our
+  // own font-size changes can't trigger another observation.
+  const schedule = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; fitHeaderSubtitle(); });
+  };
+  if (header && "ResizeObserver" in window) new ResizeObserver(schedule).observe(header);
+  if (badge) new MutationObserver(schedule).observe(badge, { childList: true, characterData: true, subtree: true, attributes: true });
+  document.fonts?.ready.then(schedule);
+  schedule();
 });
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -66,6 +122,7 @@ const state = {
   videoRecordingEnabled: false, // Setting: whether video recording is enabled
   isTranscriptUpdate: false, // Flag to distinguish transcript vs user edits
   gifBlobUrl: null, // Blob URL for GIF download (GIF NOT sent to AI)
+  historyId: null, // History entry of the ticket on screen (refine/copy update it)
 };
 
 const MAX_SCREENSHOTS = 6;
@@ -188,6 +245,125 @@ function showRefineVersion(which) {
   setRefineButton(which);
 }
 
+// ── Cancellable refine requests ──────────────────────────────────────────────
+let activeNoteRefine = null;   // { requestId, cancelled } while ✨ refine runs
+let activeChatRefine = null;   // { requestId, cancelled, feedback } while the chat refine runs
+
+function newRequestId(kind) {
+  return `${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Loading state of the ✨ refine: spinner on the button, read-only description,
+// and the "Refining description… ✕ Cancel" row under it.
+function setNoteRefining(on) {
+  if (on) setRefineButton("loading");
+  noteInput.readOnly = on;
+  noteInput.classList.toggle("refining", on);
+  $("refine-status").hidden = !on;
+}
+
+// ── Reference media for AI refinement ────────────────────────────────────────
+// Screenshots plus a few frames sampled from the GIF and video recordings, so the
+// AI can check the description against what was actually on screen. Frames are
+// JPEG, at most 1280px wide. Any media that can't be read is skipped, never fatal.
+const MAX_REFERENCE_IMAGES = 10;
+const FRAMES_PER_RECORDING = 3;
+const FRAME_MAX_WIDTH = 1280;
+
+function frameToDataUrl(source, width, height) {
+  const scale = Math.min(1, FRAME_MAX_WIDTH / width);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.85);
+}
+
+// Resolves on the first of `events`, or rejects after `ms`.
+function waitForEvent(target, events, ms = 5000) {
+  return new Promise((resolve, reject) => {
+    const done = (fn, arg) => {
+      clearTimeout(timer);
+      events.forEach((ev) => target.removeEventListener(ev, onEvent));
+      target.removeEventListener("error", onError);
+      fn(arg);
+    };
+    const onEvent = (e) => done(resolve, e);
+    const onError = () => done(reject, new Error("media error"));
+    const timer = setTimeout(() => done(reject, new Error("timed out")), ms);
+    events.forEach((ev) => target.addEventListener(ev, onEvent));
+    target.addEventListener("error", onError);
+  });
+}
+
+async function extractGifFrames(blobUrl, count = FRAMES_PER_RECORDING) {
+  if (!blobUrl || typeof ImageDecoder === "undefined") return [];
+  const data = await (await fetch(blobUrl)).arrayBuffer();
+  const decoder = new ImageDecoder({ data, type: "image/gif" });
+  try {
+    await decoder.tracks.ready;
+    await decoder.completed; // frameCount is only final once the whole file is parsed
+    const total = decoder.tracks.selectedTrack?.frameCount || 0;
+    const frames = [];
+    for (const frameIndex of TicketUtils.sampleFrameIndices(total, count)) {
+      const { image } = await decoder.decode({ frameIndex });
+      try {
+        frames.push({
+          src: frameToDataUrl(image, image.displayWidth, image.displayHeight),
+          time: Math.round((image.timestamp || 0) / 100000) / 10 // µs → s, 1 decimal
+        });
+      } finally {
+        image.close();
+      }
+    }
+    return frames;
+  } finally {
+    decoder.close();
+  }
+}
+
+async function extractVideoFrames(blobUrl, count = FRAMES_PER_RECORDING) {
+  if (!blobUrl) return [];
+  const video = document.createElement("video");
+  video.muted = true;
+  video.preload = "auto";
+  video.src = blobUrl;
+  try {
+    await waitForEvent(video, ["loadeddata"]);
+    let duration = video.duration;
+    if (!Number.isFinite(duration)) {
+      // MediaRecorder WebM files have no duration until the end is seeked to.
+      video.currentTime = 1e7;
+      await waitForEvent(video, ["seeked", "durationchange"]).catch(() => {});
+      duration = video.duration;
+    }
+    const frames = [];
+    for (const time of TicketUtils.sampleTimes(duration, count)) {
+      video.currentTime = time;
+      await waitForEvent(video, ["seeked"]);
+      frames.push({ src: frameToDataUrl(video, video.videoWidth, video.videoHeight), time });
+    }
+    return frames;
+  } finally {
+    video.removeAttribute("src");
+    video.load();
+  }
+}
+
+async function collectReferenceMedia() {
+  const safely = (p, what) => p.catch((e) => { console.warn(`BugReporter: skipped ${what} frames:`, e); return []; });
+  const [gifFrames, videoFrames] = await Promise.all([
+    safely(extractGifFrames(state.gifBlobUrl), "GIF"),
+    safely(extractVideoFrames(state.videoBlobUrl), "video")
+  ]);
+  return TicketUtils.combineReferenceImages({
+    screenshots: state.screenshots,
+    gifFrames,
+    videoFrames,
+    max: MAX_REFERENCE_IMAGES
+  });
+}
+
 btnRefineNote.addEventListener("click", async () => {
   if (refineVersions.showing) {
     showRefineVersion(refineVersions.showing === "refined" ? "original" : "refined");
@@ -206,24 +382,49 @@ btnRefineNote.addEventListener("click", async () => {
   }
 
   flushNoteTyping();
-  setRefineButton("loading");
-  noteInput.readOnly = true;
-  noteInput.classList.add("refining");
+  const run = { requestId: newRequestId("refine"), cancelled: false };
+  activeNoteRefine = run;
+  setNoteRefining(true);
   try {
-    const res = await chrome.runtime.sendMessage({ type: "REFINE_NOTE", payload: { note: original } });
+    const media = await collectReferenceMedia();
+    if (run.cancelled) return; // stopped while frames were being sampled
+    const res = await chrome.runtime.sendMessage({
+      type: "REFINE_NOTE",
+      requestId: run.requestId,
+      payload: { note: original, images: media.images, imageLabels: media.labels }
+    });
+    if (run.cancelled || res?.cancelled) return; // late reply after Cancel — ignore
     if (!res?.ok) throw new Error(res?.error || "Unknown error");
     refineVersions.original = noteInput.value;
     refineVersions.refined = res.note;
+    setNoteRefining(false);
     showRefineVersion("refined");
     showToast("Notes refined — review before generating", "success");
   } catch (e) {
+    if (run.cancelled) return;
+    setNoteRefining(false);
     setRefineButton("idle");
     showToast("Refine failed: " + e.message, "error", 4000);
   } finally {
-    noteInput.readOnly = false;
-    noteInput.classList.remove("refining");
+    if (activeNoteRefine === run) activeNoteRefine = null;
   }
 });
+
+// Same pattern as Generate's "✕ Cancel": stop the request in the background,
+// restore the UI at once, and ignore whatever arrives later. The description
+// was never changed, so the original text simply stays.
+function cancelNoteRefine({ silent = false } = {}) {
+  const run = activeNoteRefine;
+  if (!run || run.cancelled) return;
+  run.cancelled = true;
+  chrome.runtime.sendMessage({ type: "CANCEL_REQUEST", requestId: run.requestId }).catch(() => {});
+  activeNoteRefine = null;
+  setNoteRefining(false);
+  setRefineButton("idle");
+  if (!silent) showToast("Refining cancelled", "info");
+}
+
+$("btn-cancel-refine").addEventListener("click", () => cancelNoteRefine());
 
 // One fixed-position tooltip for all [data-tooltip] icons, kept inside the popup
 // viewport: above the icon when it fits, otherwise below, clamped horizontally.
@@ -444,7 +645,6 @@ function saveSession(includeResult = false, noteOverride = null) {
     note:        noteOverride ?? noteInput.value,
     component:   fieldComp.value,
     severity:    fieldSev.value,
-    videoBlobUrl: state.videoBlobUrl, // Persist video URL
   };
 
   // Keep the generated result whenever it is on screen — this overwrites the whole
@@ -454,6 +654,7 @@ function saveSession(includeResult = false, noteOverride = null) {
     data.generatedTicket = resultTextarea.value;
     data.showingResult = true;
     data.chatHistory = state.chatHistory;
+    data.historyId = state.historyId;
   }
 
   chrome.storage.local.set({ [STORAGE_KEY]: data });
@@ -467,6 +668,7 @@ function saveResult() {
     s.showingResult = true;
     s.screenshots = state.screenshots; // Ensure screenshots are saved with result
     s.chatHistory = state.chatHistory; // Save chat history with ticket
+    s.historyId = state.historyId;
     chrome.storage.local.set({ [STORAGE_KEY]: s });
   });
 }
@@ -482,20 +684,19 @@ async function restoreSession() {
         fieldSev.value    = s.severity  || "Medium";
         state.chatHistory = s.chatHistory || [];
         
-        // Restore video if available
-        if (s.videoBlobUrl) {
-          state.videoBlobUrl = s.videoBlobUrl;
-          // Show video UI
-          if (videoPreview) {
-            videoPreview.style.display = "block";
-            btnRecord.style.display = "none";
-            videoInfoText.textContent = "🎬 Video recorded (view or download to attach)";
-          }
+        // Video is restored by checkVideoRecording() from its own storage key —
+        // a saved blob: URL is dead once the popup that created it has closed.
+        // Older versions stored one here and showed the video from it even after
+        // the recording was deleted; drop it.
+        if ("videoBlobUrl" in s) {
+          delete s.videoBlobUrl;
+          chrome.storage.local.set({ [STORAGE_KEY]: s });
         }
 
         // Restore generated result if exists
         if (s.showingResult && s.generatedTicket) {
-          resultTextarea.value = s.generatedTicket;
+          resultTextarea.value = TicketUtils.stripEmbeddedImages(s.generatedTicket);
+          state.historyId = s.historyId || null;
           // We'll show the result panel after init completes
           state.hasRestoredResult = true;
         }
@@ -576,13 +777,14 @@ async function checkGenerationStatus() {
       } else if (genState.ticket && !state.hasRestoredResult) {
         // Generation completed while popup was closed - show result
         resultTextarea.value = genState.ticket;
+        state.historyId = genState.historyId || null;
         state.hasRestoredResult = true;
         state.chatHistory = [];
         saveResult(); // persist it, or the next open won't find it once the state is cleared
         if (genState.tokenUsage) showTokenUsage(genState.tokenUsage);
         // Clear the generation state since we've consumed the result
         chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
-        showToast("Ticket generated while popup was closed!", "success");
+        announceTicket(genState.truncated, "Ticket generated while popup was closed!");
       } else if (genState.error && !state.hasRestoredResult) {
         // Generation failed while popup was closed
         showError("Generation failed: " + genState.error);
@@ -591,6 +793,15 @@ async function checkGenerationStatus() {
       resolve();
     });
   });
+}
+
+// Success toast, or a warning when the model hit its output limit mid-ticket.
+function announceTicket(truncated, message) {
+  if (truncated) {
+    showToast("The AI hit its output limit — the ticket may be cut off. Check the end or regenerate.", "warning");
+  } else {
+    showToast(message, "success");
+  }
 }
 
 // Poll for generation completion
@@ -606,9 +817,10 @@ function startGenerationPolling() {
 
         if (genState?.ticket) {
           setLoading(false);
+          state.historyId = genState.historyId || null;
           showResult(genState.ticket);
           if (genState.tokenUsage) showTokenUsage(genState.tokenUsage);
-          showToast("Ticket generated!", "success");
+          announceTicket(genState.truncated, "Ticket generated!");
           chrome.runtime.sendMessage({ type: "CLEAR_GENERATION_STATE" });
         } else if (genState?.error) {
           setLoading(false);
@@ -632,9 +844,10 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
     setLoading(false);
     if (msg.ticket) {
+      state.historyId = msg.historyId || null;
       showResult(msg.ticket);
       if (msg.tokenUsage) showTokenUsage(msg.tokenUsage);
-      showToast("Ticket generated!", "success");
+      announceTicket(msg.truncated, "Ticket generated!");
     } else if (msg.cancelled) {
       // Cancellation already surfaced by the Cancel button handler — nothing more to show.
     } else if (msg.error) {
@@ -740,6 +953,15 @@ async function init() {
     chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
   });
 
+  $("btn-insights").addEventListener("click", () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL("history.html") });
+  });
+
+  // Batch opens in its own tab: it needs room for a review list, and the popup
+  // closes as soon as focus leaves it. The batch page reads the target page and
+  // this session's screenshots from storage.
+  $("btn-batch").addEventListener("click", () => openBatch());
+
   // A keystroke during the typing animation: finish revealing the transcript first
   // so the edit applies to the full text (and the animation can't overwrite it).
   // Keep the caret where the user put it, unless it was at the end of the
@@ -764,6 +986,7 @@ async function init() {
 
   // Clear note button
   btnClearNote.addEventListener("click", () => {
+    if (activeNoteRefine) cancelNoteRefine(); // a late reply must not refill a cleared note
     cancelNoteTyping();
     noteInput.value = "";
     syncNoteInput();
@@ -963,6 +1186,7 @@ function renderGrid() {
     editBtn.className = "thumb-edit";
     editBtn.dataset.index = i;
     editBtn.title = "Edit";
+    editBtn.setAttribute("aria-label", `Edit screenshot ${i + 1}`);
     editBtn.textContent = "✏️";
     editBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -973,6 +1197,7 @@ function renderGrid() {
     delBtn.className = "thumb-del";
     delBtn.dataset.index = i;
     delBtn.title = "Remove";
+    delBtn.setAttribute("aria-label", `Remove screenshot ${i + 1}`);
     delBtn.textContent = "✕";
     delBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -1205,7 +1430,7 @@ uploadInput.addEventListener("change", async () => {
   for (const file of files.slice(0, room)) {
     if (!file.type.startsWith("image/")) continue;
     try {
-      const dataUrl = await readFileAsDataUrl(file);
+      const dataUrl = await toPngDataUrl(await readFileAsDataUrl(file));
       state.screenshots.push(dataUrl);
     } catch (e) {
       showError("Upload failed: " + e.message);
@@ -1267,6 +1492,21 @@ async function base64ToBlob(b64, type) {
   return res.blob();
 }
 
+// Updates flags on a stored recording *only if that same recording is still there*.
+// Writing back a copy read earlier would re-create a recording that was deleted in
+// the meantime (that is how a deleted video could reappear).
+async function patchRecording(key, expected, patch) {
+  const current = (await chrome.storage.local.get(key))[key];
+  const same = current &&
+    (current.videoBlobBase64 || current.gifBlobBase64) &&
+    current.savedAt === expected.savedAt &&
+    (current.videoBlobBase64 || current.gifBlobBase64).length === (expected.videoBlobBase64 || expected.gifBlobBase64).length;
+  if (!same) return false;
+  Object.assign(expected, patch);
+  await chrome.storage.local.set({ [key]: { ...current, ...patch } });
+  return true;
+}
+
 async function checkVideoRecording() {
   return new Promise((resolve) => {
     chrome.storage.local.get(VIDEO_RECORDING_KEY, async (result) => {
@@ -1300,11 +1540,14 @@ async function checkVideoRecording() {
           showToast("Voice transcript added to notes!", "info");
           
           // Mark transcript as added to prevent re-adding
-          data.transcriptAdded = true;
-          chrome.storage.local.set({ [VIDEO_RECORDING_KEY]: data });
+          await patchRecording(VIDEO_RECORDING_KEY, data, { transcriptAdded: true });
         }
 
-        showToast("Video ready for download!", "success");
+        // Announce once per recording, not on every popup open.
+        if (!data.announced) {
+          showToast("Video ready for download!", "success");
+          await patchRecording(VIDEO_RECORDING_KEY, data, { announced: true });
+        }
 
         // Keep the recording data in storage for persistence across popup sessions
         // Only remove when user explicitly deletes or resets
@@ -1370,8 +1613,10 @@ function deleteVideo() {
     state.videoBlobUrl = null;
   }
 
-  // Clear video from storage
+  // Clear video from storage, and re-save the session so nothing stale about the
+  // video survives the popup closing.
   chrome.storage.local.remove(VIDEO_RECORDING_KEY);
+  saveSession();
 
   // Reset capture panel UI
   videoPreview.style.display = "none";
@@ -1435,7 +1680,11 @@ async function checkGifRecording() {
         btnGif.style.display = "none";
         gifInfoText.textContent = "🎞️ GIF recorded (view or download to attach)";
 
-        showToast("GIF ready for download!", "success");
+        // Announce once per recording, not on every popup open.
+        if (!data.announced) {
+          showToast("GIF ready for download!", "success");
+          await patchRecording(GIF_RECORDING_KEY, data, { announced: true });
+        }
         resolve();
         return;
       }
@@ -1615,11 +1864,45 @@ function updateGenerateBtn() {
   }
 }
 
-btnGenerate.addEventListener("click", async () => {
+// Opens the batch page for the current tab. `rawText` (optional) pre-fills its
+// issue list — used when the popup's description turns out to be a list.
+async function openBatch(rawText = "") {
+  saveSession();
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  await chrome.storage.local.set({
+    bugReporterBatchLaunch: {
+      targetTabId: tab?.id || null,
+      pageUrl: tab?.url || "",
+      pageTitle: tab?.title || "",
+      rawText,
+      at: Date.now()
+    }
+  });
+  chrome.tabs.create({ url: chrome.runtime.getURL("batch.html") });
+}
+
+btnGenerate.addEventListener("click", async (event) => {
   const hasScreenshots = state.screenshots.length > 0;
   const hasNotes = noteInput.value.trim().length > 0;
 
   if (!hasScreenshots && !hasNotes) return;
+
+  // A bulleted list of several problems would be merged into one ticket here.
+  // Offer the batch flow — but only on a real click, not on Regenerate, where
+  // the reporter has already chosen.
+  if (event.isTrusted && TicketUtils.looksLikeIssueList(noteInput.value)) {
+    const n = TicketUtils.countBulletItems(noteInput.value);
+    const asBatch = await showConfirmDialog(
+      "Several issues?",
+      `Your description lists ${n} items. Create a separate ticket for each in a batch, or one ticket that covers all of them?`,
+      "Open as batch",
+      "One ticket"
+    );
+    if (asBatch) {
+      await openBatch(noteInput.value.trim());
+      return;
+    }
+  }
   setLoading(true); clearError();
   loadingText.textContent = hasScreenshots
     ? "Analyzing screenshots and generating the ticket…"
@@ -1631,8 +1914,8 @@ btnGenerate.addEventListener("click", async () => {
     state.enabledFields.includes("severity") ? `Severity: ${fieldSev.value}` : ""
   ].filter(Boolean).join("\n");
 
-  // Get screen info
-  const screenInfo = `${window.screen.width}x${window.screen.height} (viewport: ${window.innerWidth}x${window.innerHeight})`;
+  // Environment of the page being reported (not this popup window)
+  const env = await getPageEnvironment();
 
   try {
     const res = await chrome.runtime.sendMessage({
@@ -1642,7 +1925,19 @@ btnGenerate.addEventListener("click", async () => {
         audioNote: fullNote,
         pageUrl: state.pageUrl,
         pageTitle: state.pageTitle,
-        screenInfo
+        screenInfo: env.screenInfo,
+        browserInfo: env.browser,
+        osInfo: env.os,
+        // Details for the local history (Insights). Thumbnail only, never full media.
+        history: {
+          note: noteInput.value.trim(),
+          severity: state.enabledFields.includes("severity") ? fieldSev.value : "",
+          component: state.enabledFields.includes("component") ? fieldComp.value.trim() : "",
+          screenshotCount: state.screenshots.length,
+          hasVideo: !!state.videoBlobUrl,
+          hasGif: !!state.gifBlobUrl,
+          thumbnail: await makeThumbnail(state.screenshots[0])
+        }
       }
     });
     if (res?.ok && res.generationId) {
@@ -1656,7 +1951,7 @@ btnGenerate.addEventListener("click", async () => {
       showToast("Ticket generated successfully!", "success");
     } else {
       setLoading(false);
-      showError("Gemini error: " + (res?.error || "Check API key in Settings ⚙️"));
+      showError("Couldn't start generation: " + (res?.error || "check your API key in Settings ⚙️"));
     }
   } catch (e) {
     setLoading(false);
@@ -1724,6 +2019,7 @@ function displayResultPanel() {
       const editBtn = document.createElement("button");
       editBtn.innerHTML = "✏️";
       editBtn.title = `Edit screenshot ${i + 1}`;
+      editBtn.setAttribute("aria-label", `Edit screenshot ${i + 1}`);
       editBtn.style.cssText = `
         position: absolute;
         top: 4px;
@@ -1751,7 +2047,20 @@ function displayResultPanel() {
         editBtn.style.opacity = "0";
       });
       
+      // View button — opens the same preview modal as the capture grid,
+      // with ←/→ to move between screenshots.
+      const viewBtn = document.createElement("button");
+      viewBtn.className = "result-shot-view";
+      viewBtn.innerHTML = icons.eye;
+      viewBtn.title = `View screenshot ${i + 1}`;
+      viewBtn.setAttribute("aria-label", `View screenshot ${i + 1}`);
+      viewBtn.addEventListener("click", (e) => {
+        e.stopPropagation(); // Prevent triggering image copy
+        showPreview(i);
+      });
+
       screenshotContainer.appendChild(img);
+      screenshotContainer.appendChild(viewBtn);
       screenshotContainer.appendChild(editBtn);
       screenshotsGrid.appendChild(screenshotContainer);
     });
@@ -1792,10 +2101,9 @@ function syncResultMedia() {
 // Copy a single image to clipboard
 async function copyImageToClipboard(dataUrl, index) {
   try {
-    const response = await fetch(dataUrl);
-    const blob = await response.blob();
+    const blob = await dataUrlToPngBlob(dataUrl);
     await navigator.clipboard.write([
-      new ClipboardItem({ [blob.type]: blob })
+      new ClipboardItem({ "image/png": blob })
     ]);
     showToast(`Screenshot ${index} copied!`, "success");
   } catch (err) {
@@ -1804,105 +2112,12 @@ async function copyImageToClipboard(dataUrl, index) {
   }
 }
 
-// Create composite image from multiple screenshots
-async function createCompositeImage(screenshots) {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  
-  // Load all images first
-  const images = await Promise.all(screenshots.map(src => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = src;
-    });
-  }));
-  
-  // Calculate layout for composite image
-  const maxWidth = Math.max(...images.map(img => img.width));
-  const totalHeight = images.reduce((sum, img) => sum + img.height, 0);
-  const padding = 10;
-  const headerHeight = 30;
-  
-  // Set canvas size
-  canvas.width = maxWidth + (padding * 2);
-  canvas.height = totalHeight + (padding * (images.length + 1)) + (headerHeight * images.length);
-  
-  // Fill background
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  
-  // Draw images with labels
-  let currentY = padding;
-  images.forEach((img, index) => {
-    // Draw label
-    ctx.fillStyle = '#333333';
-    ctx.font = '16px Arial, sans-serif';
-    ctx.fillText(`Screenshot ${index + 1}`, padding, currentY + 20);
-    currentY += headerHeight;
-    
-    // Draw image
-    const x = Math.max(0, (canvas.width - img.width) / 2);
-    ctx.drawImage(img, x, currentY);
-    currentY += img.height + padding;
-  });
-  
-  // Convert to blob
-  return new Promise(resolve => {
-    canvas.toBlob(resolve, 'image/png', 0.9);
-  });
-}
+// Markdown → HTML for rich-text targets (e.g. Jira) lives in lib/ticket-utils.js.
+const markdownToHtml = TicketUtils.markdownToHtml;
 
-// Convert the AI's Markdown output to HTML so rich-text targets (e.g. Jira's
-// description editor) render bold/code/lists instead of showing raw asterisks.
-function markdownToHtml(md) {
-  const escapeHtml = (s) => s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
-  const inline = (s) => escapeHtml(s)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-
-  const lines = md.split('\n');
-  const html = [];
-  let listType = null; // 'ul' | 'ol' | null
-
-  const closeList = () => {
-    if (listType) { html.push(`</${listType}>`); listType = null; }
-  };
-
-  for (const rawLine of lines) {
-    const line = rawLine.trimEnd();
-    const heading = line.match(/^##\s+(.+)$/);
-    const checkbox = line.match(/^-\s+\[ \]\s*(.*)$/);
-    const bullet = line.match(/^[-*]\s+(.+)$/);
-    const numbered = line.match(/^\d+\.\s+(.+)$/);
-
-    if (heading) {
-      closeList();
-      html.push(`<h2>${inline(heading[1])}</h2>`);
-    } else if (checkbox) {
-      if (listType !== 'ul') { closeList(); html.push('<ul>'); listType = 'ul'; }
-      html.push(`<li>☐ ${inline(checkbox[1])}</li>`);
-    } else if (bullet) {
-      if (listType !== 'ul') { closeList(); html.push('<ul>'); listType = 'ul'; }
-      html.push(`<li>${inline(bullet[1])}</li>`);
-    } else if (numbered) {
-      if (listType !== 'ol') { closeList(); html.push('<ol>'); listType = 'ol'; }
-      html.push(`<li>${inline(numbered[1])}</li>`);
-    } else if (line.trim() === '') {
-      closeList();
-      html.push('<br>');
-    } else {
-      closeList();
-      html.push(`<p>${inline(line)}</p>`);
-    }
-  }
-  closeList();
-  return html.join('\n');
+// "Copied" is the best local signal that a generated ticket was actually used.
+function markHistoryCopied() {
+  if (state.historyId) chrome.runtime.sendMessage({ type: "HISTORY_MARK_COPIED", id: state.historyId }).catch(() => {});
 }
 
 function showCopyFeedback(msg) {
@@ -1913,7 +2128,8 @@ function showCopyFeedback(msg) {
 
 btnCopy.addEventListener("click", async () => {
   try {
-    let textContent = resultTextarea.value;
+    const ticketText = TicketUtils.stripEmbeddedImages(resultTextarea.value);
+    let textContent = ticketText;
     
     // Add attachment instructions to text content if we have media
     if (state.videoBlobUrl || state.gifBlobUrl) {
@@ -1933,7 +2149,7 @@ btnCopy.addEventListener("click", async () => {
     clipboardItems['text/plain'] = new Blob([textContent], { type: 'text/plain' });
     
     // Enhanced HTML version
-    let htmlContent = markdownToHtml(resultTextarea.value);
+    let htmlContent = markdownToHtml(ticketText);
 
     if (state.videoBlobUrl || state.gifBlobUrl) {
       htmlContent += '<br><br><strong>Attachments:</strong><br>';
@@ -1951,9 +2167,8 @@ btnCopy.addEventListener("click", async () => {
     if (state.screenshots.length === 1) {
       // Single screenshot - copy as-is
       try {
-        const response = await fetch(state.screenshots[0]);
-        const blob = await response.blob();
-        clipboardItems['image/png'] = blob;
+        // The clipboard only accepts PNG images — convert uploads (JPEG/WebP).
+        clipboardItems['image/png'] = await dataUrlToPngBlob(state.screenshots[0]);
       } catch (err) {
         console.warn('Failed to include screenshot:', err);
       }
@@ -1965,9 +2180,7 @@ btnCopy.addEventListener("click", async () => {
       } catch (err) {
         console.warn('Failed to create composite image, using first screenshot:', err);
         try {
-          const response = await fetch(state.screenshots[0]);
-          const blob = await response.blob();
-          clipboardItems['image/png'] = blob;
+          clipboardItems['image/png'] = await dataUrlToPngBlob(state.screenshots[0]);
         } catch (err2) {
           console.warn('Failed to include any screenshot:', err2);
         }
@@ -1978,6 +2191,7 @@ btnCopy.addEventListener("click", async () => {
     await navigator.clipboard.write([new ClipboardItem(clipboardItems)]);
 
     showCopyFeedback("✓ Copied!");
+    markHistoryCopied();
     
     let toastMessage = "Ticket copied to clipboard!";
     if (state.screenshots.length === 1) {
@@ -1994,7 +2208,7 @@ btnCopy.addEventListener("click", async () => {
   } catch (err) {
     console.error('Clipboard copy failed:', err);
     // Fallback to plain text copy
-    let fallbackText = resultTextarea.value;
+    let fallbackText = TicketUtils.stripEmbeddedImages(resultTextarea.value);
     if (state.videoBlobUrl || state.gifBlobUrl) {
       fallbackText += '\n\n--- ATTACHMENTS ---\n';
       if (state.videoBlobUrl) fallbackText += '🎬 1 screen recording (use download button)\n';
@@ -2003,11 +2217,13 @@ btnCopy.addEventListener("click", async () => {
 
     await navigator.clipboard.writeText(fallbackText);
     showCopyFeedback("✓ Copied!");
+    markHistoryCopied();
     showToast("Ticket copied! Click screenshots individually or use download button for video/GIF.", "warning");
   }
 });
 
 btnRegen.addEventListener("click", () => {
+  if (activeChatRefine) cancelChatRefine({ silent: true }); // its reply would overwrite the new ticket
   state.hasRestoredResult = false; // the old ticket is being replaced
   resultPanel.classList.remove("visible");
   capturePanel.style.display = "block";
@@ -2072,6 +2288,10 @@ btnReset.addEventListener("click", async () => {
   noteInput.value = ""; fieldComp.value = ""; fieldSev.value = "Medium";
   resultTextarea.value = "";
   clearSession();
+  state.historyId = null;
+  // Starting over abandons any refine still running.
+  if (activeNoteRefine) cancelNoteRefine({ silent: true });
+  if (activeChatRefine) cancelChatRefine({ silent: true });
   resultPanel.classList.remove("visible");
   capturePanel.style.display = "block";
   syncNoteInput(); // shrink back to empty size + hide clear button
@@ -2164,12 +2384,13 @@ function showToast(message, type = "info", duration = 3000) {
 // ── Confirmation Dialog ──────────────────────────────────────────────────────
 let dialogResolve = null;
 
-function showConfirmDialog(title, message, confirmText = "Confirm") {
+function showConfirmDialog(title, message, confirmText = "Confirm", cancelText = "Cancel") {
   return new Promise((resolve) => {
     dialogResolve = resolve;
     $("dialog-title").textContent = title;
     $("dialog-message").textContent = message;
     $("dialog-confirm").textContent = confirmText;
+    $("dialog-cancel").textContent = cancelText;
     $("dialog-overlay").classList.add("visible");
   });
 }
@@ -2293,7 +2514,33 @@ function renderChatHistory() {
   chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
+// While a chat refine runs, the send button is a stop button.
+function setChatRefining(on) {
+  btnImprove.classList.toggle("stop", on);
+  btnImprove.innerHTML = on ? '<span aria-hidden="true">■</span>' : "<span>↑</span>";
+  btnImprove.title = on ? "Stop refining" : "Send feedback to AI";
+  btnImprove.setAttribute("aria-label", on ? "Stop refining" : "Send feedback to AI");
+}
+
+function cancelChatRefine({ silent = false } = {}) {
+  const run = activeChatRefine;
+  if (!run || run.cancelled) return;
+  run.cancelled = true;
+  chrome.runtime.sendMessage({ type: "CANCEL_REQUEST", requestId: run.requestId }).catch(() => {});
+  activeChatRefine = null;
+  // Take the unanswered message back out of the conversation and return it to
+  // the input, so it can be edited or re-sent. The ticket is unchanged.
+  setChatRefining(false);
+  if (silent) return;
+  const last = state.chatHistory[state.chatHistory.length - 1];
+  if (last && last.role === "user" && last.content === run.feedback) state.chatHistory.pop();
+  renderChatHistory();
+  if (!chatInput.value.trim()) chatInput.value = run.feedback;
+  showToast("Refining cancelled — ticket unchanged", "info");
+}
+
 btnImprove.addEventListener("click", async () => {
+  if (activeChatRefine) { cancelChatRefine(); return; }
   const feedback = chatInput.value.trim();
   if (!feedback) return;
   if (!resultTextarea.value) return;
@@ -2307,21 +2554,24 @@ btnImprove.addEventListener("click", async () => {
   renderChatHistory();
   chatInput.value = "";
 
-  // Show loading state
-  btnImprove.disabled = true;
-  btnImprove.classList.add("loading");
-  btnImprove.innerHTML = "<span>⟳</span>";
+  const run = { requestId: newRequestId("chat"), cancelled: false, feedback };
+  activeChatRefine = run;
+  setChatRefining(true);
 
   try {
     const res = await chrome.runtime.sendMessage({
       type: "IMPROVE_TICKET",
+      requestId: run.requestId,
       payload: {
         currentTicket: resultTextarea.value,
         feedback,
         chatHistory: priorHistory,
-        screenshots: state.screenshots
+        screenshots: state.screenshots,
+        historyId: state.historyId
       }
     });
+
+    if (run.cancelled || res?.cancelled) return; // stopped — ignore late replies
 
     if (res?.ok && res.ticket) {
       // Add AI response to chat
@@ -2331,28 +2581,31 @@ btnImprove.addEventListener("click", async () => {
       // Update ticket
       resultTextarea.value = res.ticket;
       saveResult();
-      showToast("Ticket improved!", "success");
+      announceTicket(res.truncated, "Ticket improved!");
     } else {
       state.chatHistory.push({ role: "ai", content: "Error: " + (res?.error || "Failed") });
       renderChatHistory();
       showToast("Error: " + (res?.error || "Failed"), "error");
     }
   } catch (e) {
+    if (run.cancelled) return;
     state.chatHistory.push({ role: "ai", content: "Error: " + e.message });
     renderChatHistory();
     showToast("Error: " + e.message, "error");
   } finally {
-    btnImprove.disabled = false;
-    btnImprove.classList.remove("loading");
-    btnImprove.innerHTML = "<span>↑</span>";
+    if (activeChatRefine === run) {
+      activeChatRefine = null;
+      setChatRefining(false);
+    }
   }
 });
 
-// Allow Enter to send (Shift+Enter for newline)
+// Allow Enter to send (Shift+Enter for newline). Enter never stops a running
+// refine — only an explicit click on the stop button does.
 chatInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    btnImprove.click();
+    if (!activeChatRefine) btnImprove.click();
   }
 });
 
